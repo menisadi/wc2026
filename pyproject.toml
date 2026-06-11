@@ -1,0 +1,30 @@
+[project]
+name = "wc2026"
+version = "0.1.0"
+description = "FIFA World Cup 2026 prediction model"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "scikit-learn>=1.5",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.scripts]
+wc2026 = "wc2026.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wc2026"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
