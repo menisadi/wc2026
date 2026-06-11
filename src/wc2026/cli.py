@@ -24,7 +24,7 @@ def _status(msg: str, quiet: bool):
     return nullcontext() if quiet else err_console.status(msg)
 
 
-def _load_and_train(quiet: bool = False) -> tuple:
+def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
     """Load all data, build features, train Poisson model. Returns (model, groups, strengths)."""
     from wc2026.data.loader import (
         extract_groups,
@@ -50,7 +50,7 @@ def _load_and_train(quiet: bool = False) -> tuple:
 
     with _status("Training Poisson model…", quiet):
         model = PoissonModel()
-        model.fit(results, strengths)
+        model.fit(results, strengths, half_life_years=half_life)
 
     return model, groups, strengths
 
@@ -60,9 +60,10 @@ def predict_match(
     team_a: str = typer.Argument(..., help="First team (use canonical name)"),
     team_b: str = typer.Argument(..., help="Second team"),
     simulations: int = typer.Option(50_000, "--sims", help="Number of simulated matches"),
+    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Predict the outcome of a single match between TEAM_A and TEAM_B."""
-    model, groups, strengths = _load_and_train()
+    model, groups, strengths = _load_and_train(half_life=half_life)
 
     # Resolve names (schedule canonical)
     from wc2026.data.loader import SCHEDULE_TO_CANONICAL
@@ -121,11 +122,12 @@ def simulate(
     show_groups: bool = typer.Option(False, "--groups/--no-groups", help="Print group composition"),
     csv: bool = typer.Option(False, "--csv", help="Output results as CSV"),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
+    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Run a full Monte Carlo tournament simulation."""
     from wc2026.simulate.tournament import run_monte_carlo
 
-    model, groups, _ = _load_and_train(quiet=quiet)
+    model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
 
     with _status(f"Running {simulations:,} simulations…", quiet):
         sim = run_monte_carlo(groups, model, n=simulations, seed=seed)
@@ -174,12 +176,13 @@ def top_scorer(
     simulations: int = typer.Option(10_000, "--sims"),
     csv: bool = typer.Option(False, "--csv", help="Output results as CSV"),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
+    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Predict top goal scorer candidates based on recent form + team advancement probability."""
     from wc2026.data.loader import load_goalscorers
     from wc2026.simulate.tournament import run_monte_carlo
 
-    model, groups, _ = _load_and_train(quiet=quiet)
+    model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
 
     with _status("Loading goalscorers and running simulations…", quiet):
         goals_df = load_goalscorers(min_year=2021)
@@ -283,6 +286,7 @@ def show_scenario(
     output: str = typer.Option(
         "", "--output", "-o", help="Save HTML to this path instead of opening browser"
     ),
+    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Simulate one full tournament and open the results in a browser.
 
@@ -306,7 +310,7 @@ def show_scenario(
         console.print("[red]--mode must be 'random', 'plausible', or 'modal'[/red]")
         raise typer.Exit(1)
 
-    model, groups, _ = _load_and_train()
+    model, groups, _ = _load_and_train(half_life=half_life)
 
     with console.status(f"Building {mode} scenario…"):
         if mode == "modal":

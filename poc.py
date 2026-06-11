@@ -80,15 +80,14 @@ class PoissonModel:
     fall back to an ELO-derived estimate.
     """
 
-    def fit(self, results: pd.DataFrame, elo: pd.DataFrame) -> PoissonModel:
+    def fit(self, results: pd.DataFrame, elo: pd.DataFrame, half_life: float = 3.0) -> PoissonModel:
         df = results.dropna(subset=["home_score", "away_score"]).copy()
         teams = sorted(set(df["home_team"]) | set(df["away_team"]))
         idx = {t: i for i, t in enumerate(teams)}
         n = len(teams)
 
-        # Exponential recency weights — matches 3 years ago get weight 0.5
         age = (df["date"].max() - df["date"]).dt.days.values.astype(float)
-        w = np.exp(-np.log(2) * age / (3.0 * 365.25))
+        w = np.exp(-np.log(2) * age / (half_life * 365.25))
 
         # Design matrix: [attack_0..n-1 | defense_0..n-1 | home_advantage]
         # Two rows per match: one for home goals, one for away goals
@@ -224,6 +223,13 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=10, help="teams to display")
     parser.add_argument("--csv", action="store_true", help="output results as CSV")
     parser.add_argument("--quiet", action="store_true", help="suppress progress messages")
+    parser.add_argument(
+        "--half-life",
+        type=float,
+        default=3.0,
+        dest="half_life",
+        help="recency decay half-life in years (lower = more weight on recent matches)",
+    )
     args = parser.parse_args()
 
     if not args.quiet:
@@ -236,7 +242,7 @@ def main() -> None:
 
     if not args.quiet:
         print("Fitting Poisson model…")
-    model = PoissonModel().fit(results, elo_wc)
+    model = PoissonModel().fit(results, elo_wc, half_life=args.half_life)
 
     if not args.quiet:
         print(f"Running {args.sims:,} simulations…")
