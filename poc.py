@@ -222,6 +222,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="WC 2026 winner predictor")
     parser.add_argument("--sims", type=int, default=10_000, help="number of Monte Carlo runs")
     parser.add_argument("--top", type=int, default=10, help="teams to display")
+    parser.add_argument("--csv", action="store_true", help="output results as CSV")
     args = parser.parse_args()
 
     print("Loading data…")
@@ -238,10 +239,16 @@ def main() -> None:
     rng = np.random.default_rng(42)
     wins: Counter[str] = Counter(sim_tournament(groups, model, rng) for _ in range(args.sims))
 
-    print(f"\nTop {args.top} most likely WC 2026 champions:\n")
+    if args.csv:
+        print("rank,team,pct")
+    else:
+        print(f"\nTop {args.top} most likely WC 2026 champions:\n")
     for rank, (team, count) in enumerate(wins.most_common(args.top), 1):
         pct = count / args.sims * 100
-        print(f"  {rank:2}. {team:<25} {pct:5.1f}%")
+        if args.csv:
+            print(f"{rank},{team},{pct:.4f}")
+        else:
+            print(f"  {rank:2}. {team:<25} {pct:5.1f}%")
 
 
 if __name__ == "__main__":
