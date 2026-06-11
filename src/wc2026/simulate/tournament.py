@@ -340,3 +340,65 @@ def predict_modal_tournament(
         final=final_out[0],
         champion=final_win[0],
     )
+
+
+def simulate_nucleus_tournament(
+    groups: dict[str, list[str]],
+    model: PoissonModel,
+    confidence: float = 0.80,
+    rng: np.random.Generator | None = None,
+    seed: int | None = None,
+) -> FullTournamentResult:
+    """Random bracket where each match samples from the top-P nucleus of its score distribution.
+
+    Produces variety across runs while excluding freak low-probability scorelines.
+    """
+    if rng is None:
+        rng = np.random.default_rng(seed)
+
+    # Group stage — draws allowed
+    group_standings: dict[str, list[TeamRecord]] = {}
+    for g, teams in groups.items():
+        records = {t: TeamRecord(t) for t in teams}
+        for i, ta in enumerate(teams):
+            for tb in teams[i + 1 :]:
+                from wc2026.model.poisson import MatchResult
+
+                result: MatchResult = model.simulate_nucleus_match(ta, tb, confidence, rng)
+                records[ta].update(result.goals_a, result.goals_b)
+                records[tb].update(result.goals_b, result.goals_a)
+        group_standings[g] = sorted(records.values(), key=lambda r: r.sort_key(), reverse=True)
+
+    third_qualifiers = pick_best_third_place(group_standings)
+    r32_pairs = build_knockout_bracket(group_standings)
+
+    def nucleus_round(
+        pairs: list[tuple[str, str]],
+    ) -> tuple[list[MatchOutcome], list[str]]:
+        outcomes: list[MatchOutcome] = []
+        winners: list[str] = []
+        for ta, tb in pairs:
+            winner, result = model.simulate_nucleus_knockout_match(ta, tb, confidence, rng)
+            is_penalty = result.winner is None
+            outcomes.append(
+                MatchOutcome(ta, tb, result.goals_a, result.goals_b, winner, is_penalty)
+            )
+            winners.append(winner)
+        return outcomes, winners
+
+    r32_out, r32_win = nucleus_round(r32_pairs)
+    r16_out, r16_win = nucleus_round(pairs_from_winners(r32_win))
+    qf_out, qf_win = nucleus_round(pairs_from_winners(r16_win))
+    sf_out, sf_win = nucleus_round(pairs_from_winners(qf_win))
+    final_out, final_win = nucleus_round(pairs_from_winners(sf_win))
+
+    return FullTournamentResult(
+        group_standings=group_standings,
+        third_qualifiers=third_qualifiers,
+        r32=r32_out,
+        r16=r16_out,
+        qf=qf_out,
+        sf=sf_out,
+        final=final_out[0],
+        champion=final_win[0],
+    )

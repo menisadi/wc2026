@@ -242,27 +242,42 @@ def show_scenario(
     mode: str = typer.Option(
         "random",
         "--mode",
-        help="'random' (sampled simulation) or 'modal' (most-probable outcome per match)",
+        help=(
+            "'random': fully sampled | "
+            "'plausible': nucleus-sampled (no freak results) | "
+            "'modal': deterministic most-probable bracket"
+        ),
     ),
-    seed: int = typer.Option(42, "--seed", help="RNG seed (only used in random mode)"),
+    seed: int = typer.Option(42, "--seed", help="RNG seed (random and plausible modes)"),
+    confidence: float = typer.Option(
+        0.80,
+        "--confidence",
+        help="Nucleus mass threshold for --mode plausible (0–1, default 0.80)",
+    ),
     output: str = typer.Option(
         "", "--output", "-o", help="Save HTML to this path instead of opening browser"
     ),
 ) -> None:
     """Simulate one full tournament and open the results in a browser.
 
-    Use --mode modal to see the single most probable bracket (each match
-    takes its highest-probability outcome, color-coded by confidence).
+    Modes:\n
+      random    — fully random Poisson draw, anything can happen\n
+      plausible — nucleus sampling: random but only from the top-P% of scorelines\n
+      modal     — deterministic: each match takes its single most probable outcome
     """
     import tempfile
     import webbrowser
     from pathlib import Path
 
-    from wc2026.simulate.tournament import predict_modal_tournament, simulate_full_tournament
+    from wc2026.simulate.tournament import (
+        predict_modal_tournament,
+        simulate_full_tournament,
+        simulate_nucleus_tournament,
+    )
     from wc2026.viz.html import generate_html
 
-    if mode not in ("random", "modal"):
-        console.print("[red]--mode must be 'random' or 'modal'[/red]")
+    if mode not in ("random", "plausible", "modal"):
+        console.print("[red]--mode must be 'random', 'plausible', or 'modal'[/red]")
         raise typer.Exit(1)
 
     model, groups, _ = _load_and_train()
@@ -270,6 +285,8 @@ def show_scenario(
     with console.status(f"Building {mode} scenario…"):
         if mode == "modal":
             result = predict_modal_tournament(groups, model)
+        elif mode == "plausible":
+            result = simulate_nucleus_tournament(groups, model, confidence=confidence, seed=seed)
         else:
             result = simulate_full_tournament(groups, model, seed=seed)
 

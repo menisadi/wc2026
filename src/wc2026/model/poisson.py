@@ -156,6 +156,63 @@ class PoissonModel:
             winner = team_a if rng.random() < 0.5 else team_b
         return winner, result
 
+    def simulate_nucleus_match(
+        self,
+        team_a: str,
+        team_b: str,
+        confidence: float = 0.80,
+        rng: np.random.Generator | None = None,
+        max_goals: int = 8,
+    ) -> MatchResult:
+        """Sample a scoreline from the top-P nucleus of the joint Poisson distribution.
+
+        Sorts all (ga, gb) pairs by probability, keeps the most probable ones
+        until their cumulative mass >= confidence, then samples from that set.
+        This excludes freak scorelines while preserving meaningful randomness.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+        xg_a, xg_b = self.predict_xg(team_a, team_b)
+
+        scores: list[tuple[float, int, int]] = []
+        for ga in range(max_goals + 1):
+            for gb in range(max_goals + 1):
+                p = float(poisson.pmf(ga, xg_a) * poisson.pmf(gb, xg_b))
+                scores.append((p, ga, gb))
+
+        scores.sort(reverse=True)
+
+        nucleus: list[tuple[float, int, int]] = []
+        cumulative = 0.0
+        for p, ga, gb in scores:
+            nucleus.append((p, ga, gb))
+            cumulative += p
+            if cumulative >= confidence:
+                break
+
+        probs = np.array([p for p, _, _ in nucleus])
+        probs /= probs.sum()
+        idx = int(rng.choice(len(nucleus), p=probs))
+        _, ga, gb = nucleus[idx]
+        return MatchResult(ga, gb)
+
+    def simulate_nucleus_knockout_match(
+        self,
+        team_a: str,
+        team_b: str,
+        confidence: float = 0.80,
+        rng: np.random.Generator | None = None,
+    ) -> tuple[str, MatchResult]:
+        """Nucleus-sampled knockout match; draws resolved by penalties (50/50)."""
+        if rng is None:
+            rng = np.random.default_rng()
+        result = self.simulate_nucleus_match(team_a, team_b, confidence, rng)
+        if result.winner is not None:
+            winner = team_a if result.winner == "a" else team_b
+        else:
+            winner = team_a if rng.random() < 0.5 else team_b
+        return winner, result
+
     def win_draw_loss_probs(
         self, team_a: str, team_b: str, max_goals: int = 10
     ) -> tuple[float, float, float]:
