@@ -223,19 +223,23 @@ def main() -> None:
     parser.add_argument("--sims", type=int, default=10_000, help="number of Monte Carlo runs")
     parser.add_argument("--top", type=int, default=10, help="teams to display")
     parser.add_argument("--csv", action="store_true", help="output results as CSV")
+    parser.add_argument("--quiet", action="store_true", help="suppress progress messages")
     args = parser.parse_args()
 
-    print("Loading data…")
+    if not args.quiet:
+        print("Loading data…")
     results, schedule, elo = load_data()
     groups = extract_groups(schedule)
 
     wc_teams = [t for teams in groups.values() for t in teams]
     elo_wc = elo[elo.index.isin(wc_teams)]
 
-    print("Fitting Poisson model…")
+    if not args.quiet:
+        print("Fitting Poisson model…")
     model = PoissonModel().fit(results, elo_wc)
 
-    print(f"Running {args.sims:,} simulations…")
+    if not args.quiet:
+        print(f"Running {args.sims:,} simulations…")
     rng = np.random.default_rng(42)
     wins: Counter[str] = Counter(sim_tournament(groups, model, rng) for _ in range(args.sims))
 
