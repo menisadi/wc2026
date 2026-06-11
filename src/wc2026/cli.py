@@ -9,15 +9,22 @@ Commands:
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import typer
 from rich.console import Console
 from rich.table import Table
 
 app = typer.Typer(help="FIFA World Cup 2026 predictions")
 console = Console()
+err_console = Console(stderr=True)
 
 
-def _load_and_train() -> tuple:
+def _status(msg: str, quiet: bool):
+    return nullcontext() if quiet else err_console.status(msg)
+
+
+def _load_and_train(quiet: bool = False) -> tuple:
     """Load all data, build features, train Poisson model. Returns (model, groups, strengths)."""
     from wc2026.data.loader import (
         extract_groups,
@@ -29,7 +36,7 @@ def _load_and_train() -> tuple:
     from wc2026.features.builder import build_team_strengths
     from wc2026.model.poisson import PoissonModel
 
-    with console.status("Loading data…"):
+    with _status("Loading data…", quiet):
         results = load_results(min_year=2010)
         schedule = load_schedule()
         rankings = load_rankings()
@@ -38,10 +45,10 @@ def _load_and_train() -> tuple:
 
     all_wc_teams = [t for teams in groups.values() for t in teams]
 
-    with console.status("Building team strengths…"):
+    with _status("Building team strengths…", quiet):
         strengths = build_team_strengths(all_wc_teams, rankings, elo)
 
-    with console.status("Training Poisson model…"):
+    with _status("Training Poisson model…", quiet):
         model = PoissonModel()
         model.fit(results, strengths)
 
@@ -112,21 +119,30 @@ def simulate(
     top: int = typer.Option(20, "--top", help="Show top N teams"),
     seed: int = typer.Option(42, "--seed"),
     show_groups: bool = typer.Option(False, "--groups/--no-groups", help="Print group composition"),
+    csv: bool = typer.Option(False, "--csv", help="Output results as CSV"),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
 ) -> None:
     """Run a full Monte Carlo tournament simulation."""
     from wc2026.simulate.tournament import run_monte_carlo
 
-    model, groups, _ = _load_and_train()
+    model, groups, _ = _load_and_train(quiet=quiet)
 
-    with console.status(f"Running {simulations:,} simulations…"):
+    with _status(f"Running {simulations:,} simulations…", quiet):
         sim = run_monte_carlo(groups, model, n=simulations, seed=seed)
+
+    ranked = sim.sorted_by_win_prob()
+
+    if csv:
+        print("rank,team,win_pct,final_pct,semi_pct")
+        for i, (team, p_win) in enumerate(ranked[:top], 1):
+            print(f"{i},{team},{p_win:.4f},{sim.final_prob(team):.4f},{sim.sf_prob(team):.4f}")
+        return
 
     if show_groups:
         console.print("\n[bold]Groups[/bold]")
         for g, teams in sorted(groups.items()):
             console.print(f"  Group {g}: {', '.join(teams)}")
 
-    # Print results table
     table = Table(
         title=f"\nTournament probabilities ({simulations:,} simulations)", show_header=True
     )
@@ -136,7 +152,6 @@ def simulate(
     table.add_column("Final %", justify="right")
     table.add_column("Semi %", justify="right")
 
-    ranked = sim.sorted_by_win_prob()
     for i, (team, p_win) in enumerate(ranked[:top], 1):
         table.add_row(
             str(i),
@@ -157,14 +172,16 @@ def top_scorer(
     top: int = typer.Option(20, "--top", help="Show top N players"),
     min_goals: int = typer.Option(3, "--min-goals", help="Minimum goals in reference period"),
     simulations: int = typer.Option(10_000, "--sims"),
+    csv: bool = typer.Option(False, "--csv", help="Output results as CSV"),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
 ) -> None:
     """Predict top goal scorer candidates based on recent form + team advancement probability."""
     from wc2026.data.loader import load_goalscorers
     from wc2026.simulate.tournament import run_monte_carlo
 
-    model, groups, _ = _load_and_train()
+    model, groups, _ = _load_and_train(quiet=quiet)
 
-    with console.status("Loading goalscorers and running simulations…"):
+    with _status("Loading goalscorers and running simulations…", quiet):
         goals_df = load_goalscorers(min_year=2021)
         sim = run_monte_carlo(groups, model, n=simulations)
 
@@ -214,6 +231,14 @@ def top_scorer(
     # Keep only players from WC teams
     player_goals = player_goals[player_goals["expected_wc_games"] > 0]
     player_goals = player_goals.sort_values("expected_wc_goals", ascending=False).head(top)
+
+    if csv:
+        print("rank,player,team,goals,goals_per_game,expected_wc_goals")
+        for i, row in enumerate(player_goals.itertuples(), 1):
+            print(
+                f"{i},{row.scorer},{row.team},{int(row.goals)},{row.goals_per_game:.4f},{row.expected_wc_goals:.4f}"
+            )
+        return
 
     table = Table(
         title=f"Top scorer candidates (goals since 2021, {simulations:,} sims)", show_header=True
