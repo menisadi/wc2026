@@ -51,6 +51,7 @@ class MatchOutcome:
     goals_b: int
     winner: str
     is_penalty: bool = False
+    confidence: float = 1.0  # P(this outcome type); used for confidence coloring in modal mode
 
 
 @dataclass
@@ -291,4 +292,51 @@ def simulate_full_tournament(
         sf=sf_outcomes,
         final=final_outcomes[0],
         champion=final_winners[0],
+    )
+
+
+def predict_modal_tournament(
+    groups: dict[str, list[str]],
+    model: PoissonModel,
+) -> FullTournamentResult:
+    """Deterministic bracket: each match takes its single most probable outcome."""
+
+    # Modal group stage
+    group_standings: dict[str, list[TeamRecord]] = {}
+    for g, teams in groups.items():
+        records = {t: TeamRecord(t) for t in teams}
+        for i, ta in enumerate(teams):
+            for tb in teams[i + 1 :]:
+                ga, gb, _winner, _conf = model.predict_modal_match(ta, tb, knockout=False)
+                records[ta].update(ga, gb)
+                records[tb].update(gb, ga)
+        group_standings[g] = sorted(records.values(), key=lambda r: r.sort_key(), reverse=True)
+
+    third_qualifiers = pick_best_third_place(group_standings)
+    r32_pairs = build_knockout_bracket(group_standings)
+
+    def modal_round(pairs: list[tuple[str, str]]) -> tuple[list[MatchOutcome], list[str]]:
+        outcomes: list[MatchOutcome] = []
+        winners: list[str] = []
+        for ta, tb in pairs:
+            ga, gb, winner, conf = model.predict_modal_match(ta, tb, knockout=True)
+            outcomes.append(MatchOutcome(ta, tb, ga, gb, winner, False, conf))
+            winners.append(winner)
+        return outcomes, winners
+
+    r32_out, r32_win = modal_round(r32_pairs)
+    r16_out, r16_win = modal_round(pairs_from_winners(r32_win))
+    qf_out, qf_win = modal_round(pairs_from_winners(r16_win))
+    sf_out, sf_win = modal_round(pairs_from_winners(qf_win))
+    final_out, final_win = modal_round(pairs_from_winners(sf_win))
+
+    return FullTournamentResult(
+        group_standings=group_standings,
+        third_qualifiers=third_qualifiers,
+        r32=r32_out,
+        r16=r16_out,
+        qf=qf_out,
+        sf=sf_out,
+        final=final_out[0],
+        champion=final_win[0],
     )

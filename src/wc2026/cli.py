@@ -239,26 +239,42 @@ def top_scorer(
 
 @app.command("show-scenario")
 def show_scenario(
-    seed: int = typer.Option(42, "--seed", help="RNG seed for reproducibility"),
+    mode: str = typer.Option(
+        "random",
+        "--mode",
+        help="'random' (sampled simulation) or 'modal' (most-probable outcome per match)",
+    ),
+    seed: int = typer.Option(42, "--seed", help="RNG seed (only used in random mode)"),
     output: str = typer.Option(
         "", "--output", "-o", help="Save HTML to this path instead of opening browser"
     ),
 ) -> None:
-    """Simulate one full tournament and open the results in a browser."""
+    """Simulate one full tournament and open the results in a browser.
+
+    Use --mode modal to see the single most probable bracket (each match
+    takes its highest-probability outcome, color-coded by confidence).
+    """
     import tempfile
     import webbrowser
     from pathlib import Path
 
-    from wc2026.simulate.tournament import simulate_full_tournament
+    from wc2026.simulate.tournament import predict_modal_tournament, simulate_full_tournament
     from wc2026.viz.html import generate_html
+
+    if mode not in ("random", "modal"):
+        console.print("[red]--mode must be 'random' or 'modal'[/red]")
+        raise typer.Exit(1)
 
     model, groups, _ = _load_and_train()
 
-    with console.status("Simulating tournament…"):
-        result = simulate_full_tournament(groups, model, seed=seed)
+    with console.status(f"Building {mode} scenario…"):
+        if mode == "modal":
+            result = predict_modal_tournament(groups, model)
+        else:
+            result = simulate_full_tournament(groups, model, seed=seed)
 
     with console.status("Generating HTML…"):
-        html_content = generate_html(result)
+        html_content = generate_html(result, mode=mode)
 
     if output:
         path = Path(output)

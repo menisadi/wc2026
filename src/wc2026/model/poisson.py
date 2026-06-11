@@ -173,3 +173,57 @@ class PoissonModel:
                     p_win_b += p
         total = p_win_a + p_draw + p_win_b
         return p_win_a / total, p_draw / total, p_win_b / total
+
+    def predict_modal_match(
+        self,
+        team_a: str,
+        team_b: str,
+        knockout: bool = False,
+        max_goals: int = 8,
+    ) -> tuple[int, int, str, float]:
+        """
+        Return (goals_a, goals_b, winner, confidence).
+
+        winner is "" for draws (group stage only).
+        confidence is P(chosen outcome type: win_a / draw / win_b).
+        For knockout=True, draws are broken by picking the team more likely to advance.
+        """
+        xg_a, xg_b = self.predict_xg(team_a, team_b)
+        p_a, p_d, p_b = self.win_draw_loss_probs(team_a, team_b)
+
+        # outcome_type: 1 = A wins, 0 = draw, -1 = B wins
+        if knockout:
+            p_a_advances = p_a + 0.5 * p_d
+            outcome_type = 1 if p_a_advances >= 0.5 else -1
+            winner = team_a if outcome_type == 1 else team_b
+            confidence = max(p_a_advances, 1.0 - p_a_advances)
+        elif p_a >= p_d and p_a >= p_b:
+            outcome_type = 1
+            winner = team_a
+            confidence = p_a
+        elif p_d >= p_a and p_d >= p_b:
+            outcome_type = 0
+            winner = ""  # draw
+            confidence = p_d
+        else:
+            outcome_type = -1
+            winner = team_b
+            confidence = p_b
+
+        best_p = -1.0
+        best_ga, best_gb = (1, 0) if winner != team_b else (0, 1)
+        for ga in range(max_goals + 1):
+            for gb in range(max_goals + 1):
+                match outcome_type:
+                    case 1 if ga <= gb:
+                        continue
+                    case 0 if ga != gb:
+                        continue
+                    case -1 if gb <= ga:
+                        continue
+                p = float(poisson.pmf(ga, xg_a) * poisson.pmf(gb, xg_b))
+                if p > best_p:
+                    best_p = p
+                    best_ga, best_gb = ga, gb
+
+        return best_ga, best_gb, winner, confidence
