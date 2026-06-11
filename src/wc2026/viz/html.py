@@ -48,21 +48,21 @@ _CSS = """
 }
 [data-theme="dark"] {
   --bg:          #0f1117;
-  --card-bg:     #1e2130;
+  --card-bg:     #1e2940;   /* blue-navy, clearly distinct from the near-black page bg */
   --text:        #e2e8f0;
   --muted:       #94a3b8;
-  --accent:      #4ade80;
+  --accent:      #68b896;   /* muted sage green, not electric */
   --accent-text: #0f1117;
-  --border:      #334155;
-  --winner-bg:   #14532d;
-  --conf-high:   #14532d;
+  --border:      #2e3d56;
+  --winner-bg:   #1a4535;   /* green-shifted, hue-distinct from card-bg blue */
+  --conf-high:   #1a4535;
   --conf-med:    #713f12;
   --conf-low:    #7c3000;
-  --q1-bg:       #14532d;
+  --q1-bg:       #1a4535;
   --q3-bg:       #713f12;
   --out-bg:      #7f1d1d;
   --connector:   #475569;
-  --svg-bg:      #1e2130;
+  --svg-bg:      #171e2c;   /* slightly darker than card-bg to give depth to the bracket area */
   --section-bg:  #0f1117;
 }
 
