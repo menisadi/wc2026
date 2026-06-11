@@ -111,6 +111,7 @@ def simulate(
     simulations: int = typer.Option(10_000, "--sims", "-n", help="Number of Monte Carlo runs"),
     top: int = typer.Option(20, "--top", help="Show top N teams"),
     seed: int = typer.Option(42, "--seed"),
+    show_groups: bool = typer.Option(False, "--groups/--no-groups", help="Print group composition"),
 ) -> None:
     """Run a full Monte Carlo tournament simulation."""
     from wc2026.simulate.tournament import run_monte_carlo
@@ -120,10 +121,10 @@ def simulate(
     with console.status(f"Running {simulations:,} simulations…"):
         sim = run_monte_carlo(groups, model, n=simulations, seed=seed)
 
-    # Print groups
-    console.print("\n[bold]Groups[/bold]")
-    for g, teams in sorted(groups.items()):
-        console.print(f"  Group {g}: {', '.join(teams)}")
+    if show_groups:
+        console.print("\n[bold]Groups[/bold]")
+        for g, teams in sorted(groups.items()):
+            console.print(f"  Group {g}: {', '.join(teams)}")
 
     # Print results table
     table = Table(
