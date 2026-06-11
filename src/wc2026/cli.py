@@ -274,5 +274,37 @@ def show_scenario(
     console.print(f"\n[bold green]Champion:[/bold green] {result.champion}")
 
 
+@app.command("refresh-data")
+def refresh_data() -> None:
+    """Re-download all Kaggle datasets to pick up latest match results."""
+    import subprocess
+    from pathlib import Path
+
+    raw = Path(__file__).parents[3] / "data" / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+
+    datasets = [
+        "martj42/international-football-results-from-1872-to-2017",
+        "piterfm/fifa-football-world-cup",
+        "afonsofernandescruz/2026-fifa-world-cup-historical-elo-ratings",
+    ]
+
+    for ds in datasets:
+        console.print(f"Downloading [bold]{ds}[/bold]…")
+        result = subprocess.run(
+            ["kaggle", "datasets", "download", ds, "--unzip", "-p", str(raw)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(f"[red]Error:[/red] {result.stderr.strip()}")
+        else:
+            console.print("  [green]✓[/green] done")
+
+    console.print(
+        "\n[bold green]All datasets refreshed.[/bold green] Re-run any command to use updated data."
+    )
+
+
 if __name__ == "__main__":
     app()
