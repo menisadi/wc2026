@@ -241,8 +241,7 @@ def main() -> None:
     print(f"\nTop {args.top} most likely WC 2026 champions:\n")
     for rank, (team, count) in enumerate(wins.most_common(args.top), 1):
         pct = count / args.sims * 100
-        bar = "█" * int(pct / 2)
-        print(f"  {rank:2}. {team:<25} {pct:5.1f}%  {bar}")
+        print(f"  {rank:2}. {team:<25} {pct:5.1f}%")
 
 
 if __name__ == "__main__":
