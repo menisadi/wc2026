@@ -228,8 +228,11 @@ def main() -> None:
     results, schedule, elo = load_data()
     groups = extract_groups(schedule)
 
+    wc_teams = [t for teams in groups.values() for t in teams]
+    elo_wc = elo[elo.index.isin(wc_teams)]
+
     print("Fitting Poisson model…")
-    model = PoissonModel().fit(results, elo)
+    model = PoissonModel().fit(results, elo_wc)
 
     print(f"Running {args.sims:,} simulations…")
     rng = np.random.default_rng(42)

@@ -228,7 +228,7 @@ def run_monte_carlo(
         for t in finalists:
             results.final_counts[t] = results.final_counts.get(t, 0) + 1
 
-        champion = finalists[0]
+        champion = simulate_knockout_round(pairs_from_winners(finalists), model, rng)[0]
         results.win_counts[champion] = results.win_counts.get(champion, 0) + 1
 
     return results
