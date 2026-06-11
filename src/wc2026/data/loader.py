@@ -59,6 +59,15 @@ def load_elo() -> pd.DataFrame:
     return df.set_index("country")
 
 
+def load_elo_history() -> pd.DataFrame:
+    """One row per (country, year) using the latest snapshot of that year."""
+    df = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv", parse_dates=["snapshot_date"])
+    df["country"] = df["country"].map(lambda t: _normalize(t, ELO_TO_CANONICAL))
+    df["year"] = df["snapshot_date"].dt.year
+    df = df.sort_values("snapshot_date").drop_duplicates(["country", "year"], keep="last")
+    return df[["country", "year", "rating"]].reset_index(drop=True)
+
+
 def load_goalscorers(min_year: int = 2018) -> pd.DataFrame:
     df = pd.read_csv(DATA_DIR / "goalscorers.csv", parse_dates=["date"])
     df = df[df["date"].dt.year >= min_year].copy()

@@ -44,14 +44,45 @@ class PoissonModel:
         self._defense: dict[str, float] = {}
         self._base_rate: float = 1.3
         self._fitted = False
+        self._has_elo_feature: bool = False
+        self._elo_atk_coef: float = 0.0
+        self._elo_def_coef: float = 0.0
+        self._elo_train_mu: float = 0.0
+        self._elo_train_sd: float = 1.0
 
     def fit(
         self,
         results: pd.DataFrame,
         strengths: dict[str, TeamStrength],
         half_life_years: float = 3.0,
+        elo_history: pd.DataFrame | None = None,
     ) -> PoissonModel:
         df = results.dropna(subset=["home_score", "away_score"]).copy()
+
+        # If ELO history is provided, attach per-match ELO and drop rows missing either side
+        if elo_history is not None and not elo_history.empty:
+            elo_lookup: dict[tuple[str, int], float] = {
+                (str(c), int(y)): float(rt)
+                for c, y, rt in zip(
+                    elo_history["country"], elo_history["year"], elo_history["rating"]
+                )
+            }
+
+            def lookup_elo(team: str, year: int) -> float | None:
+                # Try same year, then nearby years to absorb minor snapshot gaps
+                for y in (year, year - 1, year + 1, year - 2):
+                    val = elo_lookup.get((team, y))
+                    if val is not None:
+                        return val
+                return None
+
+            years = df["date"].dt.year.astype(int).values
+            df["_home_elo"] = [lookup_elo(t, y) for t, y in zip(df["home_team"], years)]
+            df["_away_elo"] = [lookup_elo(t, y) for t, y in zip(df["away_team"], years)]
+            df = df.dropna(subset=["_home_elo", "_away_elo"]).reset_index(drop=True)
+            self._has_elo_feature = True
+        else:
+            self._has_elo_feature = False
 
         self._teams = sorted(set(df["home_team"]) | set(df["away_team"]))
         self._team_idx = {t: i for i, t in enumerate(self._teams)}
@@ -60,12 +91,18 @@ class PoissonModel:
         weights = compute_recency_weights(df["date"], half_life_years)
 
         # Build sparse design matrix: 2 rows per match
-        # Features: [attack_0..n-1, defense_0..n-1, home_adv]
+        # Features: [attack_0..n-1, defense_0..n-1, home_adv, (scorer_elo_z, conceder_elo_z)?]
+        extra = 2 if self._has_elo_feature else 0
         n_rows = 2 * len(df)
-        n_feat = 2 * n_teams + 1
+        n_feat = 2 * n_teams + 1 + extra
         X = lil_matrix((n_rows, n_feat), dtype=np.float32)
         y = np.zeros(n_rows)
         w = np.zeros(n_rows)
+
+        if self._has_elo_feature:
+            all_elos = np.concatenate([df["_home_elo"].values, df["_away_elo"].values])
+            self._elo_train_mu = float(all_elos.mean())
+            self._elo_train_sd = float(all_elos.std()) or 1.0
 
         for i, (_, row) in enumerate(df.iterrows()):
             h, a = row["home_team"], row["away_team"]
@@ -73,17 +110,25 @@ class PoissonModel:
             home_adv = 0.0 if row["neutral"] else 1.0
             wt = weights[i]
 
-            # Home attack row
+            # Home attack row: scorer = home, conceder = away
             X[2 * i, hi] = 1
             X[2 * i, n_teams + ai] = 1
-            X[2 * i, -1] = home_adv
+            X[2 * i, 2 * n_teams] = home_adv
+            if self._has_elo_feature:
+                hz = (row["_home_elo"] - self._elo_train_mu) / self._elo_train_sd
+                az = (row["_away_elo"] - self._elo_train_mu) / self._elo_train_sd
+                X[2 * i, 2 * n_teams + 1] = hz  # scorer_elo_z
+                X[2 * i, 2 * n_teams + 2] = az  # conceder_elo_z
             y[2 * i] = row["home_score"]
             w[2 * i] = wt
 
-            # Away attack row
+            # Away attack row: scorer = away, conceder = home
             X[2 * i + 1, ai] = 1
             X[2 * i + 1, n_teams + hi] = 1
             # no home advantage for away
+            if self._has_elo_feature:
+                X[2 * i + 1, 2 * n_teams + 1] = az  # scorer_elo_z
+                X[2 * i + 1, 2 * n_teams + 2] = hz  # conceder_elo_z
             y[2 * i + 1] = row["away_score"]
             w[2 * i + 1] = wt
 
@@ -94,6 +139,9 @@ class PoissonModel:
         for team, idx in self._team_idx.items():
             self._attack[team] = float(coef[idx])
             self._defense[team] = float(coef[n_teams + idx])
+        if self._has_elo_feature:
+            self._elo_atk_coef = float(coef[2 * n_teams + 1])
+            self._elo_def_coef = float(coef[2 * n_teams + 2])
 
         self._base_rate = float(np.average(y[y > 0], weights=w[y > 0])) if (y > 0).any() else 1.3
 
@@ -115,12 +163,21 @@ class PoissonModel:
         """Return (attack_coef, defense_coef) for a team, using ELO fallback."""
         if team in self._attack:
             return self._attack[team], self._defense[team]
-        # Fallback: derive from ELO percentile
+        # When the ELO feature is active it already encodes strength globally,
+        # so an unknown team contributes zero team-specific residual.
+        if self._has_elo_feature:
+            return 0.0, 0.0
+        # Legacy fallback: derive from ELO percentile
         elo = self._strengths[team].elo if team in self._strengths else self._elo_mean
         z = (elo - self._elo_mean) / self._elo_std
         # Scale: ±1 std ELO ≈ ±0.15 attack coefficient (empirical)
         adj = 0.15 * z
         return adj, -adj  # better teams attack more, concede less
+
+    def _elo_z(self, team: str) -> float:
+        """Standardized ELO against the training distribution (latest snapshot from strengths)."""
+        elo = self._strengths[team].elo if team in self._strengths else self._elo_train_mu
+        return (elo - self._elo_train_mu) / self._elo_train_sd
 
     def predict_xg(self, team_a: str, team_b: str) -> tuple[float, float]:
         """Return (xg_a, xg_b) for a neutral-venue match."""
@@ -129,8 +186,16 @@ class PoissonModel:
         atk_b, def_b = self._get_attack_defense(team_b)
         intercept = self._model.intercept_
 
-        xg_a = float(np.exp(intercept + atk_a + def_b))
-        xg_b = float(np.exp(intercept + atk_b + def_a))
+        if self._has_elo_feature:
+            za = self._elo_z(team_a)
+            zb = self._elo_z(team_b)
+            elo_a_term = self._elo_atk_coef * za + self._elo_def_coef * zb
+            elo_b_term = self._elo_atk_coef * zb + self._elo_def_coef * za
+        else:
+            elo_a_term = elo_b_term = 0.0
+
+        xg_a = float(np.exp(intercept + atk_a + def_b + elo_a_term))
+        xg_b = float(np.exp(intercept + atk_b + def_a + elo_b_term))
         return xg_a, xg_b
 
     def simulate_match(

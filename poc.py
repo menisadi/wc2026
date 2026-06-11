@@ -35,7 +35,7 @@ RANKINGS_NORM: dict[str, str] = {"USA": "United States", "Cabo Verde": "Cape Ver
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 
-def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     results = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
     results = results[results["date"].dt.year >= 2010].copy()
     results["home_score"] = results["home_score"].fillna(0).astype(int)
@@ -45,10 +45,16 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     for col in ("home_team", "away_team"):
         schedule[col] = schedule[col].map(lambda t: SCHEDULE_NORM.get(t, t))
 
-    elo = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv")
-    elo = elo[elo["snapshot_date"] == elo["snapshot_date"].max()].set_index("country")
+    elo_raw = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv", parse_dates=["snapshot_date"])
+    elo = elo_raw[elo_raw["snapshot_date"] == elo_raw["snapshot_date"].max()].set_index("country")
 
-    return results, schedule, elo
+    # Per-year ELO history: one row per (country, year), latest snapshot in that year
+    hist = elo_raw.copy()
+    hist["year"] = hist["snapshot_date"].dt.year
+    hist = hist.sort_values("snapshot_date").drop_duplicates(["country", "year"], keep="last")
+    elo_history = hist[["country", "year", "rating"]].reset_index(drop=True)
+
+    return results, schedule, elo, elo_history
 
 
 def extract_groups(schedule: pd.DataFrame) -> dict[str, list[str]]:
@@ -80,8 +86,39 @@ class PoissonModel:
     fall back to an ELO-derived estimate.
     """
 
-    def fit(self, results: pd.DataFrame, elo: pd.DataFrame, half_life: float = 3.0) -> PoissonModel:
+    def fit(
+        self,
+        results: pd.DataFrame,
+        elo: pd.DataFrame,
+        half_life: float = 3.0,
+        elo_history: pd.DataFrame | None = None,
+    ) -> PoissonModel:
         df = results.dropna(subset=["home_score", "away_score"]).copy()
+
+        # When ELO history is provided, attach per-match ELO and drop rows missing either side.
+        # Adds two standardized features (scorer_z, conceder_z) so cross-tier strength is encoded
+        # globally — preventing minnow coefficients from collapsing to "average" against weak peers.
+        has_elo = elo_history is not None and not elo_history.empty
+        if has_elo:
+            lookup = {
+                (str(c), int(y)): float(rt)
+                for c, y, rt in zip(
+                    elo_history["country"], elo_history["year"], elo_history["rating"]
+                )
+            }
+
+            def at(team: str, year: int) -> float | None:
+                for y in (year, year - 1, year + 1, year - 2):
+                    val = lookup.get((team, y))
+                    if val is not None:
+                        return val
+                return None
+
+            years = df["date"].dt.year.astype(int).values
+            df["_he"] = [at(t, y) for t, y in zip(df["home_team"], years)]
+            df["_ae"] = [at(t, y) for t, y in zip(df["away_team"], years)]
+            df = df.dropna(subset=["_he", "_ae"]).reset_index(drop=True)
+
         teams = sorted(set(df["home_team"]) | set(df["away_team"]))
         idx = {t: i for i, t in enumerate(teams)}
         n = len(teams)
@@ -89,18 +126,33 @@ class PoissonModel:
         age = (df["date"].max() - df["date"]).dt.days.values.astype(float)
         w = np.exp(-np.log(2) * age / (half_life * 365.25))
 
-        # Design matrix: [attack_0..n-1 | defense_0..n-1 | home_advantage]
-        # Two rows per match: one for home goals, one for away goals
-        X = lil_matrix((2 * len(df), 2 * n + 1), dtype=np.float32)
+        extra = 2 if has_elo else 0
+        # Design matrix: [attack_0..n-1 | defense_0..n-1 | home_adv | (scorer_z | conceder_z)?]
+        X = lil_matrix((2 * len(df), 2 * n + 1 + extra), dtype=np.float32)
         y = np.zeros(2 * len(df))
         sw = np.zeros(2 * len(df))
+
+        if has_elo:
+            all_elos = np.concatenate([df["_he"].values, df["_ae"].values])
+            elo_train_mu = float(all_elos.mean())
+            elo_train_sd = float(all_elos.std()) or 1.0
+        else:
+            elo_train_mu, elo_train_sd = 0.0, 1.0
+
         for i, (_, row) in enumerate(df.iterrows()):
             hi, ai = idx[row["home_team"]], idx[row["away_team"]]
             X[2 * i, hi] = 1
             X[2 * i, n + ai] = 1
-            X[2 * i, -1] = 0.0 if row["neutral"] else 1.0
+            X[2 * i, 2 * n] = 0.0 if row["neutral"] else 1.0
             X[2 * i + 1, ai] = 1
             X[2 * i + 1, n + hi] = 1
+            if has_elo:
+                hz = (row["_he"] - elo_train_mu) / elo_train_sd
+                az = (row["_ae"] - elo_train_mu) / elo_train_sd
+                X[2 * i, 2 * n + 1] = hz  # scorer_z (home)
+                X[2 * i, 2 * n + 2] = az  # conceder_z (away)
+                X[2 * i + 1, 2 * n + 1] = az  # scorer_z (away)
+                X[2 * i + 1, 2 * n + 2] = hz  # conceder_z (home)
             y[2 * i], y[2 * i + 1] = row["home_score"], row["away_score"]
             sw[2 * i] = sw[2 * i + 1] = w[i]
 
@@ -111,6 +163,11 @@ class PoissonModel:
         self._atk = {t: float(coef[i]) for t, i in idx.items()}
         self._def = {t: float(coef[n + i]) for t, i in idx.items()}
         self._intercept = float(reg.intercept_)
+        self._has_elo = has_elo
+        self._elo_atk = float(coef[2 * n + 1]) if has_elo else 0.0
+        self._elo_def = float(coef[2 * n + 2]) if has_elo else 0.0
+        self._elo_train_mu = elo_train_mu
+        self._elo_train_sd = elo_train_sd
 
         elo_r = elo["rating"].values
         self._elo = elo
@@ -119,17 +176,34 @@ class PoissonModel:
         return self
 
     def _params(self, team: str) -> tuple[float, float]:
-        """Return (attack_coef, defense_coef), with ELO fallback for unknown teams."""
+        """Return (attack_coef, defense_coef); unknown teams → 0 when ELO feature active."""
         if team in self._atk:
             return self._atk[team], self._def[team]
+        if self._has_elo:
+            return 0.0, 0.0
         elo = float(self._elo.loc[team, "rating"]) if team in self._elo.index else self._elo_mean
         adj = 0.15 * (elo - self._elo_mean) / self._elo_std
         return adj, -adj
 
+    def _elo_z(self, team: str) -> float:
+        elo = (
+            float(self._elo.loc[team, "rating"]) if team in self._elo.index else self._elo_train_mu
+        )
+        return (elo - self._elo_train_mu) / self._elo_train_sd
+
     def xg(self, a: str, b: str) -> tuple[float, float]:
         aa, da = self._params(a)
         ab, db = self._params(b)
-        return float(np.exp(self._intercept + aa + db)), float(np.exp(self._intercept + ab + da))
+        if self._has_elo:
+            za, zb = self._elo_z(a), self._elo_z(b)
+            extra_a = self._elo_atk * za + self._elo_def * zb
+            extra_b = self._elo_atk * zb + self._elo_def * za
+        else:
+            extra_a = extra_b = 0.0
+        return (
+            float(np.exp(self._intercept + aa + db + extra_a)),
+            float(np.exp(self._intercept + ab + da + extra_b)),
+        )
 
     def play(self, a: str, b: str, rng: np.random.Generator) -> tuple[int, int]:
         xa, xb = self.xg(a, b)
@@ -234,7 +308,7 @@ def main() -> None:
 
     if not args.quiet:
         print("Loading data…")
-    results, schedule, elo = load_data()
+    results, schedule, elo, elo_history = load_data()
     groups = extract_groups(schedule)
 
     wc_teams = [t for teams in groups.values() for t in teams]
@@ -242,7 +316,7 @@ def main() -> None:
 
     if not args.quiet:
         print("Fitting Poisson model…")
-    model = PoissonModel().fit(results, elo_wc, half_life=args.half_life)
+    model = PoissonModel().fit(results, elo_wc, half_life=args.half_life, elo_history=elo_history)
 
     if not args.quiet:
         print(f"Running {args.sims:,} simulations…")

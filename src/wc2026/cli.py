@@ -29,6 +29,7 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
     from wc2026.data.loader import (
         extract_groups,
         load_elo,
+        load_elo_history,
         load_rankings,
         load_results,
         load_schedule,
@@ -41,6 +42,7 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
         schedule = load_schedule()
         rankings = load_rankings()
         elo = load_elo()
+        elo_history = load_elo_history()
         groups = extract_groups(schedule)
 
     all_wc_teams = [t for teams in groups.values() for t in teams]
@@ -50,7 +52,7 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
 
     with _status("Training Poisson model…", quiet):
         model = PoissonModel()
-        model.fit(results, strengths, half_life_years=half_life)
+        model.fit(results, strengths, half_life_years=half_life, elo_history=elo_history)
 
     return model, groups, strengths
 
