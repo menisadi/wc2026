@@ -63,6 +63,11 @@ def predict_match(
     team_b: str = typer.Argument(..., help="Second team"),
     simulations: int = typer.Option(50_000, "--sims", help="Number of simulated matches"),
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
+    ev: bool = typer.Option(
+        False,
+        "--ev/--no-ev",
+        help="Rank scorelines by expected value (1pt for correct W/D/L, 3pt for exact score)",
+    ),
 ) -> None:
     """Predict the outcome of a single match between TEAM_A and TEAM_B."""
     model, groups, strengths = _load_and_train(half_life=half_life)
@@ -106,14 +111,45 @@ def predict_match(
         k = (r.goals_a, r.goals_b)
         score_counts[k] = score_counts.get(k, 0) + 1
 
-    top_scores = sorted(score_counts.items(), key=lambda x: x[1], reverse=True)[:8]
+    if ev:
 
-    table = Table(title="Most likely scorelines", show_header=True)
-    table.add_column("Score", style="bold")
-    table.add_column("Probability")
-    for (ga, gb), cnt in top_scores:
-        table.add_row(f"{ga}–{gb}", f"{cnt / simulations:.1%}")
-    console.print(table)
+        def score_ev(ga: int, gb: int, p_exact: float) -> float:
+            if ga > gb:
+                p_dir = p_a
+            elif ga == gb:
+                p_dir = p_d
+            else:
+                p_dir = p_b
+            return p_dir + 2 * p_exact
+
+        ranked = sorted(
+            score_counts.items(),
+            key=lambda kv: score_ev(kv[0][0], kv[0][1], kv[1] / simulations),
+            reverse=True,
+        )[:8]
+        (best_ga, best_gb), best_cnt = ranked[0]
+        best_ev = score_ev(best_ga, best_gb, best_cnt / simulations)
+        console.print(
+            f"\n[bold green]Best EV bet:[/bold green] {best_ga}–{best_gb} (EV {best_ev:.2f})"
+        )
+
+        table = Table(title="Top scorelines by expected value", show_header=True)
+        table.add_column("Score", style="bold")
+        table.add_column("Probability", justify="right")
+        table.add_column("EV", justify="right", style="green")
+        for (ga, gb), cnt in ranked:
+            p_exact = cnt / simulations
+            table.add_row(f"{ga}–{gb}", f"{p_exact:.1%}", f"{score_ev(ga, gb, p_exact):.2f}")
+        console.print(table)
+    else:
+        top_scores = sorted(score_counts.items(), key=lambda x: x[1], reverse=True)[:8]
+
+        table = Table(title="Most likely scorelines", show_header=True)
+        table.add_column("Score", style="bold")
+        table.add_column("Probability")
+        for (ga, gb), cnt in top_scores:
+            table.add_row(f"{ga}–{gb}", f"{cnt / simulations:.1%}")
+        console.print(table)
 
 
 @app.command("simulate")
