@@ -59,8 +59,14 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
 
 @app.command("predict-match")
 def predict_match(
-    team_a: str = typer.Argument(..., help="First team (use canonical name)"),
-    team_b: str = typer.Argument(..., help="Second team"),
+    team_a: str = typer.Argument(None, help="First team (use canonical name)"),
+    team_b: str = typer.Argument(None, help="Second team"),
+    game: int = typer.Option(
+        None,
+        "--game",
+        "-g",
+        help="Group-stage game number from the schedule (1-based); fetches both teams.",
+    ),
     simulations: int = typer.Option(50_000, "--sims", help="Number of simulated matches"),
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
     ev: bool = typer.Option(
@@ -70,10 +76,30 @@ def predict_match(
     ),
 ) -> None:
     """Predict the outcome of a single match between TEAM_A and TEAM_B."""
-    model, groups, strengths = _load_and_train(half_life=half_life)
+    from wc2026.data.loader import SCHEDULE_TO_CANONICAL, load_schedule
 
-    # Resolve names (schedule canonical)
-    from wc2026.data.loader import SCHEDULE_TO_CANONICAL
+    if game is not None and (team_a is not None or team_b is not None):
+        console.print("[red]Pass either --game or TEAM_A/TEAM_B, not both.[/red]")
+        raise typer.Exit(1)
+    if game is None and (team_a is None or team_b is None):
+        console.print("[red]Specify either --game N or both TEAM_A and TEAM_B.[/red]")
+        raise typer.Exit(1)
+
+    game_header = ""
+    if game is not None:
+        schedule = load_schedule()
+        group_games = schedule[schedule["Round"] == "Group stage"].reset_index(drop=True)
+        if not 1 <= game <= len(group_games):
+            console.print(
+                f"[red]--game must be between 1 and {len(group_games)} (group stage).[/red]"
+            )
+            raise typer.Exit(1)
+        row = group_games.iloc[game - 1]
+        team_a = row["home_team"]
+        team_b = row["away_team"]
+        game_header = f"Game {game} ({row['Day']} {row['Date'].date()}): "
+
+    model, groups, strengths = _load_and_train(half_life=half_life)
 
     all_known = set(model._teams) | set(strengths.keys())
 
@@ -96,7 +122,7 @@ def predict_match(
     p_a, p_d, p_b = model.win_draw_loss_probs(ta, tb)
     xg_a, xg_b = model.predict_xg(ta, tb)
 
-    console.print(f"\n[bold]{ta}[/bold] vs [bold]{tb}[/bold]\n")
+    console.print(f"\n{game_header}[bold]{ta}[/bold] vs [bold]{tb}[/bold]\n")
     console.print(f"  xG: {xg_a:.2f} – {xg_b:.2f}")
     console.print(f"  Win {ta}: [green]{p_a:.1%}[/green]")
     console.print(f"  Draw:      [yellow]{p_d:.1%}[/yellow]")
