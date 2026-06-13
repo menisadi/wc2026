@@ -27,10 +27,10 @@ def _status(msg: str, quiet: bool):
 
 def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
     """Load all data, build features, train Poisson model. Returns (model, groups, strengths)."""
+    from wc2026.data.elo import compute_elo_history
     from wc2026.data.loader import (
         extract_groups,
         load_elo,
-        load_elo_history,
         load_rankings,
         load_results,
         load_schedule,
@@ -43,7 +43,9 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
         schedule = load_schedule()
         rankings = load_rankings()
         elo = load_elo()
-        elo_history = load_elo_history()
+        # Self-computed ELO covers all 321 teams (vs ~48 in the bundled file),
+        # so the regression feature trains on the full match history.
+        elo_history = compute_elo_history(load_results(min_year=1980))
         groups = extract_groups(schedule)
 
     all_wc_teams = [t for teams in groups.values() for t in teams]
@@ -423,7 +425,8 @@ def backtest(
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress messages."),
 ) -> None:
     """Walk-forward backtest: train on past, predict each year, score W/D/L probabilities."""
-    from wc2026.data.loader import load_elo_history, load_results
+    from wc2026.data.elo import compute_elo_history
+    from wc2026.data.loader import load_results
     from wc2026.evaluate.backtest import build_predictors, walk_forward
     from wc2026.evaluate.metrics import (
         accuracy,
@@ -438,7 +441,7 @@ def backtest(
 
     with _status("Loading data…", quiet):
         results = load_results(min_year=2000)
-        elo_history = load_elo_history()
+        elo_history = compute_elo_history(load_results(min_year=1980))
 
     predictors = build_predictors(predictor_names)
 
