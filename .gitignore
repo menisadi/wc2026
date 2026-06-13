@@ -11,3 +11,6 @@ wheels/
 
 # Downloaded data (reproducible via `wc2026 refresh-data`)
 data/raw/
+
+# Secrets
+.env
