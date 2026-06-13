@@ -5,6 +5,7 @@ Commands:
   predict-match TEAM_A TEAM_B   -- head-to-head prediction
   simulate                       -- run full tournament Monte Carlo
   top-scorer                     -- predict top goal scorer candidates
+  backtest                       -- walk-forward evaluation of the model on past matches
 """
 
 from __future__ import annotations
@@ -399,6 +400,118 @@ def show_scenario(
         console.print(f"[green]Opened in browser.[/green] (tmp: {tmp.name})")
 
     console.print(f"\n[bold green]Champion:[/bold green] {result.champion}")
+
+
+@app.command("backtest")
+def backtest(
+    since: int = typer.Option(2024, "--since", help="First year to evaluate (inclusive)."),
+    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years."),
+    baselines: str = typer.Option(
+        "uniform,home-win,elo-only",
+        "--baselines",
+        help="Comma-separated baselines to compare against (uniform, home-win, elo-only).",
+    ),
+    neutral_only: bool = typer.Option(
+        False,
+        "--neutral-only",
+        help="Only evaluate on neutral-venue matches (matches the WC regime).",
+    ),
+    calibration: bool = typer.Option(
+        False, "--calibration", help="Also print a calibration table for the main model."
+    ),
+    csv: bool = typer.Option(False, "--csv", help="Output metrics as CSV."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress progress messages."),
+) -> None:
+    """Walk-forward backtest: train on past, predict each year, score W/D/L probabilities."""
+    from wc2026.data.loader import load_elo_history, load_results
+    from wc2026.evaluate.backtest import build_predictors, walk_forward
+    from wc2026.evaluate.metrics import (
+        accuracy,
+        brier_score,
+        calibration_buckets,
+        log_loss,
+        rps,
+    )
+
+    requested = [n.strip() for n in baselines.split(",") if n.strip()]
+    predictor_names = [*requested, "poisson+elo"]
+
+    with _status("Loading data…", quiet):
+        results = load_results(min_year=2000)
+        elo_history = load_elo_history()
+
+    predictors = build_predictors(predictor_names)
+
+    def progress(msg: str) -> None:
+        if not quiet:
+            err_console.log(msg)
+
+    bt = walk_forward(
+        results=results,
+        elo_history=elo_history,
+        predictors=predictors,
+        since_year=since,
+        half_life=half_life,
+        neutral_only=neutral_only,
+        progress=progress,
+    )
+
+    metric_rows: list[tuple[str, float, float, float, float, int]] = []
+    for name in bt.predictor_names:
+        sub = bt.for_predictor(name)
+        probs = sub[["p_home", "p_draw", "p_away"]].to_numpy()
+        outs = sub["outcome"].to_numpy()
+        metric_rows.append(
+            (
+                name,
+                log_loss(probs, outs),
+                brier_score(probs, outs),
+                rps(probs, outs),
+                accuracy(probs, outs),
+                len(sub),
+            )
+        )
+
+    if csv:
+        print("predictor,log_loss,brier,rps,accuracy,n")
+        for name, ll, br, rp, acc, n in metric_rows:
+            print(f"{name},{ll:.4f},{br:.4f},{rp:.4f},{acc:.4f},{n}")
+        return
+
+    title = f"Backtest {since}–{int(results['date'].dt.year.max())}"
+    if neutral_only:
+        title += " (neutral only)"
+    table = Table(title=title, show_header=True)
+    table.add_column("Predictor", style="bold")
+    table.add_column("Log loss", justify="right")
+    table.add_column("Brier", justify="right")
+    table.add_column("RPS", justify="right", style="green")
+    table.add_column("Accuracy", justify="right")
+    table.add_column("N", justify="right", style="dim")
+    for name, ll, br, rp, acc, n in metric_rows:
+        table.add_row(name, f"{ll:.4f}", f"{br:.4f}", f"{rp:.4f}", f"{acc:.1%}", str(n))
+    console.print(table)
+    console.print("[dim]Lower log-loss / Brier / RPS = better; higher accuracy = better.[/dim]")
+
+    if calibration:
+        main = bt.for_predictor("poisson+elo")
+        probs = main[["p_home", "p_draw", "p_away"]].to_numpy()
+        outs = main["outcome"].to_numpy()
+        buckets = calibration_buckets(probs, outs, n_bins=10)
+        cal_table = Table(title="Calibration (poisson+elo)", show_header=True)
+        cal_table.add_column("Bin", style="dim")
+        cal_table.add_column("Mean pred", justify="right")
+        cal_table.add_column("Mean obs", justify="right")
+        cal_table.add_column("N", justify="right")
+        for b in buckets:
+            cal_table.add_row(
+                f"{b['bin_low']:.2f}–{b['bin_high']:.2f}",
+                f"{b['mean_pred']:.3f}",
+                f"{b['mean_obs']:.3f}",
+                str(int(b["n"])),
+            )
+        console.print(cal_table)
+        console.print("[dim]Well-calibrated → mean pred ≈ mean obs in every bucket.[/dim]")
 
 
 @app.command("refresh-data")
