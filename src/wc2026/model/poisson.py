@@ -88,6 +88,7 @@ class PoissonModel:
         self._team_idx = {t: i for i, t in enumerate(self._teams)}
         n_teams = len(self._teams)
 
+        # TODO(after 2026-06-23, round 2 ends): try upweighting WC 2026 matches (×5–10) in training
         weights = compute_recency_weights(df["date"], half_life_years)
 
         # Build sparse design matrix: 2 rows per match
