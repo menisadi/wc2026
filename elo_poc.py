@@ -28,7 +28,7 @@ SCHEDULE_NORM: dict[str, str] = {
     "Türkiye": "Turkey",
 }
 
-BASE_XG = 1.3     # average goals per team in a neutral match
+BASE_XG = 1.3  # average goals per team in a neutral match
 ELO_SCALE = 600.0  # higher = flatter; at diff=600 xG ratio is e≈2.7×
 
 
@@ -142,9 +142,7 @@ def sim_knockout_round(teams: list[str], model: EloModel, rng: np.random.Generat
     return [model.knockout(teams[i], teams[i + 1], rng) for i in range(0, len(teams), 2)]
 
 
-def sim_tournament(
-    groups: dict[str, list[str]], model: EloModel, rng: np.random.Generator
-) -> str:
+def sim_tournament(groups: dict[str, list[str]], model: EloModel, rng: np.random.Generator) -> str:
     standings = {g: sim_group(teams, model, rng) for g, teams in groups.items()}
     r32_pairs = build_bracket(standings)
     r32_teams = [t for pair in r32_pairs for t in pair]
