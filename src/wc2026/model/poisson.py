@@ -60,15 +60,8 @@ class PoissonModel:
     ) -> PoissonModel:
         df = results.dropna(subset=["home_score", "away_score"]).copy()
 
-        # Prefer per-match pre-game ELO (freshest signal) if the caller attached it.
-        # Falls back to year-snapshot lookup if only `elo_history` is provided.
-        has_per_match = "home_pre_elo" in df.columns and "away_pre_elo" in df.columns
-        if has_per_match:
-            df["_home_elo"] = df["home_pre_elo"].astype(float)
-            df["_away_elo"] = df["away_pre_elo"].astype(float)
-            df = df.dropna(subset=["_home_elo", "_away_elo"]).reset_index(drop=True)
-            self._has_elo_feature = True
-        elif elo_history is not None and not elo_history.empty:
+        # If ELO history is provided, attach per-match ELO and drop rows missing either side
+        if elo_history is not None and not elo_history.empty:
             elo_lookup: dict[tuple[str, int], float] = {
                 (str(c), int(y)): float(rt)
                 for c, y, rt in zip(
@@ -189,19 +182,10 @@ class PoissonModel:
         elo = self._strengths[team].elo if team in self._strengths else self._elo_train_mu
         return (elo - self._elo_train_mu) / self._elo_train_sd
 
-    def predict_xg(
-        self,
-        team_a: str,
-        team_b: str,
-        pre_elo_a: float | None = None,
-        pre_elo_b: float | None = None,
-        home_adv: float = 0.0,
-    ) -> tuple[float, float]:
-        """Return (xg_a, xg_b).
+    def predict_xg(self, team_a: str, team_b: str, home_adv: float = 0.0) -> tuple[float, float]:
+        """Return (xg_a, xg_b). `home_adv` ∈ [0, 1] scales the trained home boost on team_a.
 
-        `home_adv` ∈ [0, 1] scales the trained home boost on team_a (1.0 → home).
-        If `pre_elo_a` / `pre_elo_b` are provided, they override the team-name
-        ELO lookup — useful for per-match pre-game ratings.
+        Default 0.0 → neutral venue (the WC regime). Pass 1.0 when team_a is the home side.
         """
         assert self._fitted
         atk_a, def_a = self._get_attack_defense(team_a)
@@ -209,14 +193,8 @@ class PoissonModel:
         intercept = self._model.intercept_
 
         if self._has_elo_feature:
-            if pre_elo_a is not None:
-                za = (pre_elo_a - self._elo_train_mu) / self._elo_train_sd
-            else:
-                za = self._elo_z(team_a)
-            if pre_elo_b is not None:
-                zb = (pre_elo_b - self._elo_train_mu) / self._elo_train_sd
-            else:
-                zb = self._elo_z(team_b)
+            za = self._elo_z(team_a)
+            zb = self._elo_z(team_b)
             elo_a_term = self._elo_atk_coef * za + self._elo_def_coef * zb
             elo_b_term = self._elo_atk_coef * zb + self._elo_def_coef * za
         else:
@@ -308,18 +286,10 @@ class PoissonModel:
         return winner, result
 
     def win_draw_loss_probs(
-        self,
-        team_a: str,
-        team_b: str,
-        max_goals: int = 10,
-        pre_elo_a: float | None = None,
-        pre_elo_b: float | None = None,
-        home_adv: float = 0.0,
+        self, team_a: str, team_b: str, max_goals: int = 10, home_adv: float = 0.0
     ) -> tuple[float, float, float]:
         """Analytical P(A wins), P(draw), P(B wins) via Poisson PMF convolution."""
-        xg_a, xg_b = self.predict_xg(
-            team_a, team_b, pre_elo_a=pre_elo_a, pre_elo_b=pre_elo_b, home_adv=home_adv
-        )
+        xg_a, xg_b = self.predict_xg(team_a, team_b, home_adv=home_adv)
         p_win_a = p_draw = p_win_b = 0.0
         for ga in range(max_goals + 1):
             for gb in range(max_goals + 1):

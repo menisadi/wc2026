@@ -207,17 +207,10 @@ class PoissonPredictor:
     def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
         assert self._model is not None
         out = np.empty((len(matches), 3))
-        has_pre = "home_pre_elo" in matches.columns and "away_pre_elo" in matches.columns
         for i, (_, m) in enumerate(matches.iterrows()):
-            pre_a = float(m["home_pre_elo"]) if has_pre else None
-            pre_b = float(m["away_pre_elo"]) if has_pre else None
             home_adv = 0.0 if bool(m["neutral"]) else 1.0
             p_h, p_d, p_a = self._model.win_draw_loss_probs(
-                m["home_team"],
-                m["away_team"],
-                pre_elo_a=pre_a,
-                pre_elo_b=pre_b,
-                home_adv=home_adv,
+                m["home_team"], m["away_team"], home_adv=home_adv
             )
             out[i] = [p_h, p_d, p_a]
         return out
@@ -253,10 +246,6 @@ def walk_forward(
       - accumulate one row per (predictor, match)
     """
     df = results.dropna(subset=["home_score", "away_score"]).copy()
-    if "home_pre_elo" not in df.columns or "away_pre_elo" not in df.columns:
-        from wc2026.data.elo import attach_pre_game_elo
-
-        df = attach_pre_game_elo(df)
     df["year"] = df["date"].dt.year
     if neutral_only:
         df = df[df["neutral"]].copy()
