@@ -139,7 +139,7 @@ class PoissonModel:
             w[2 * i + 1] = wt
 
         X_csr = csr_matrix(X)
-        self._model.fit(X_csr, y, sample_weight=w)
+        _ = self._model.fit(X_csr, y, sample_weight=w)
 
         coef = self._model.coef_
         for team, idx in self._team_idx.items():

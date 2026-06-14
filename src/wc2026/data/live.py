@@ -35,7 +35,7 @@ def _get_api_key() -> str:
 
     from dotenv import load_dotenv
 
-    load_dotenv(Path(__file__).parents[3] / ".env")
+    _ = load_dotenv(Path(__file__).parents[3] / ".env")
     key = os.getenv("FOOTBALL_API")
     if not key:
         raise RuntimeError("FOOTBALL_API key not found. Set it in .env as FOOTBALL_API=<your_key>")

@@ -196,7 +196,7 @@ class PoissonPredictor:
             elo_feature = None
 
         model = PoissonModel()
-        model.fit(
+        _ = model.fit(
             training,
             strengths,
             half_life_years=half_life,

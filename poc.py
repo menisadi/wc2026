@@ -166,7 +166,7 @@ class PoissonModel:
             sw[2 * i] = sw[2 * i + 1] = w[i]
 
         reg = PoissonRegressor(alpha=0.01, max_iter=200)
-        reg.fit(csr_matrix(X), y, sample_weight=sw)
+        _ = reg.fit(csr_matrix(X), y, sample_weight=sw)
 
         coef = reg.coef_
         self._atk = {t: float(coef[i]) for t, i in idx.items()}
@@ -302,11 +302,11 @@ def sim_tournament(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="WC 2026 winner predictor")
-    parser.add_argument("--sims", type=int, default=10_000, help="number of Monte Carlo runs")
-    parser.add_argument("--top", type=int, default=10, help="teams to display")
-    parser.add_argument("--csv", action="store_true", help="output results as CSV")
-    parser.add_argument("--quiet", action="store_true", help="suppress progress messages")
-    parser.add_argument(
+    _ = parser.add_argument("--sims", type=int, default=10_000, help="number of Monte Carlo runs")
+    _ = parser.add_argument("--top", type=int, default=10, help="teams to display")
+    _ = parser.add_argument("--csv", action="store_true", help="output results as CSV")
+    _ = parser.add_argument("--quiet", action="store_true", help="suppress progress messages")
+    _ = parser.add_argument(
         "--half-life",
         type=float,
         default=3.0,

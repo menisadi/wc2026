@@ -104,8 +104,8 @@ def compute_elo_history(
     for h, a, gh, ga, neutral, tourn, y in zip(
         home_teams, away_teams, home_scores, away_scores, neutrals, tournaments, years
     ):
-        elo.setdefault(h, initial_rating)
-        elo.setdefault(a, initial_rating)
+        _ = elo.setdefault(h, initial_rating)
+        _ = elo.setdefault(a, initial_rating)
 
         if last_year is not None and y != last_year:
             for team, rating in elo.items():

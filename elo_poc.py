@@ -159,10 +159,10 @@ def sim_tournament(groups: dict[str, list[str]], model: EloModel, rng: np.random
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="WC 2026 ELO-only predictor")
-    parser.add_argument("--sims", type=int, default=10_000)
-    parser.add_argument("--top", type=int, default=10)
-    parser.add_argument("--csv", action="store_true")
-    parser.add_argument("--quiet", action="store_true")
+    _ = parser.add_argument("--sims", type=int, default=10_000)
+    _ = parser.add_argument("--top", type=int, default=10)
+    _ = parser.add_argument("--csv", action="store_true")
+    _ = parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
     if not args.quiet:

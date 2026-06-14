@@ -81,6 +81,6 @@ def test_calibration_buckets_perfect() -> None:
 
 def test_validation_shape_errors() -> None:
     with pytest.raises(ValueError):
-        log_loss(np.zeros((3, 4)), np.zeros(3, dtype=int))
+        _ = log_loss(np.zeros((3, 4)), np.zeros(3, dtype=int))
     with pytest.raises(ValueError):
-        log_loss(np.zeros((3, 3)), np.zeros(2, dtype=int))
+        _ = log_loss(np.zeros((3, 3)), np.zeros(2, dtype=int))

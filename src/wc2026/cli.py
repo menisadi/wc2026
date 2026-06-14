@@ -61,7 +61,7 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple[Any, A
 
     with _status("Training Poisson model…", quiet):
         model = PoissonModel()
-        model.fit(results, strengths, half_life_years=half_life, elo_history=elo_history)
+        _ = model.fit(results, strengths, half_life_years=half_life, elo_history=elo_history)
 
     return model, groups, strengths
 
@@ -393,13 +393,13 @@ def show_scenario(
 
     if output:
         path = Path(output)
-        path.write_text(html_content, encoding="utf-8")
+        _ = path.write_text(html_content, encoding="utf-8")
         console.print(f"Saved to [bold]{path}[/bold]")
     else:
         tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8")
-        tmp.write(html_content)
+        _ = tmp.write(html_content)
         tmp.close()
-        webbrowser.open(f"file://{tmp.name}")
+        _ = webbrowser.open(f"file://{tmp.name}")
         console.print(f"[green]Opened in browser.[/green] (tmp: {tmp.name})")
 
     console.print(f"\n[bold green]Champion:[/bold green] {result.champion}")
@@ -566,7 +566,7 @@ def refresh_data(
     console.print("Recomputing ELO history…")
     from wc2026.data.elo import ELO_CACHE_PATH, load_or_compute_elo_history
 
-    load_or_compute_elo_history(force_refresh=True)
+    _ = load_or_compute_elo_history(force_refresh=True)
     console.print(f"  [green]✓[/green] cached at [bold]{ELO_CACHE_PATH}[/bold]")
 
     console.print("\n[bold green]Done.[/bold green] Re-run any command to use updated data.")
