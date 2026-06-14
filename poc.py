@@ -5,6 +5,7 @@ import argparse
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -37,7 +38,7 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]
 
     schedule = pd.read_csv(DATA_DIR / "schedule_2026.csv", parse_dates=["Date"])
     for col in ("home_team", "away_team"):
-        schedule[col] = schedule[col].map(lambda t: SCHEDULE_NORM.get(t, t))
+        schedule[col] = schedule[col].map(lambda t: SCHEDULE_NORM.get(str(t), str(t)))
 
     # Self-computed ELO covers all 321 teams
     cache_path = DATA_DIR.parent / "elo_history_computed.csv"
@@ -80,6 +81,19 @@ class PoissonModel:
     fall back to an ELO-derived estimate.
     """
 
+    def __init__(self) -> None:
+        self._atk: dict[str, float] = {}
+        self._def: dict[str, float] = {}
+        self._intercept: float = 0.0
+        self._has_elo: bool = False
+        self._elo_atk: float = 0.0
+        self._elo_def: float = 0.0
+        self._elo_train_mu: float = 0.0
+        self._elo_train_sd: float = 1.0
+        self._elo: pd.DataFrame = pd.DataFrame()
+        self._elo_mean: float = 1500.0
+        self._elo_std: float = 200.0
+
     def fit(
         self,
         results: pd.DataFrame,
@@ -94,6 +108,7 @@ class PoissonModel:
         # globally — preventing minnow coefficients from collapsing to "average" against weak peers.
         has_elo = elo_history is not None and not elo_history.empty
         if has_elo:
+            assert elo_history is not None
             lookup = {
                 (str(c), int(y)): float(rt)
                 for c, y, rt in zip(
@@ -127,7 +142,7 @@ class PoissonModel:
         sw = np.zeros(2 * len(df))
 
         if has_elo:
-            all_elos = np.concatenate([df["_he"].values, df["_ae"].values])
+            all_elos = np.concatenate([df["_he"].to_numpy(), df["_ae"].to_numpy()])
             elo_train_mu = float(all_elos.mean())
             elo_train_sd = float(all_elos.std()) or 1.0
         else:
@@ -163,7 +178,7 @@ class PoissonModel:
         self._elo_train_mu = elo_train_mu
         self._elo_train_sd = elo_train_sd
 
-        elo_r = elo["rating"].values
+        elo_r = elo["rating"].to_numpy()
         self._elo = elo
         self._elo_mean = float(elo_r.mean())
         self._elo_std = float(elo_r.std()) or 1.0
@@ -175,13 +190,13 @@ class PoissonModel:
             return self._atk[team], self._def[team]
         if self._has_elo:
             return 0.0, 0.0
-        elo = float(self._elo.loc[team, "rating"]) if team in self._elo.index else self._elo_mean
+        elo = cast(float, self._elo.loc[team, "rating"]) if team in self._elo.index else self._elo_mean
         adj = 0.15 * (elo - self._elo_mean) / self._elo_std
         return adj, -adj
 
     def _elo_z(self, team: str) -> float:
         elo = (
-            float(self._elo.loc[team, "rating"]) if team in self._elo.index else self._elo_train_mu
+            cast(float, self._elo.loc[team, "rating"]) if team in self._elo.index else self._elo_train_mu
         )
         return (elo - self._elo_train_mu) / self._elo_train_sd
 

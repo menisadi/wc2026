@@ -38,7 +38,7 @@ ELO_SCALE = 600.0  # higher = flatter; at diff=600 xG ratio is e≈2.7×
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     schedule = pd.read_csv(DATA_DIR / "schedule_2026.csv", parse_dates=["Date"])
     for col in ("home_team", "away_team"):
-        schedule[col] = schedule[col].map(lambda t: SCHEDULE_NORM.get(t, t))
+        schedule[col] = schedule[col].map(lambda t: SCHEDULE_NORM.get(str(t), str(t)))
 
     elo = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv")
     elo = elo[elo["snapshot_date"] == elo["snapshot_date"].max()].set_index("country")
