@@ -26,6 +26,7 @@ full coverage with no name-matching gaps by construction.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 DEFAULT_INITIAL_RATING = 1500.0
@@ -126,3 +127,58 @@ def compute_elo_history(
             snapshots.append((team, last_year, rating))
 
     return pd.DataFrame(snapshots, columns=["country", "year", "rating"])
+
+
+def attach_pre_game_elo(
+    results: pd.DataFrame,
+    initial_rating: float = DEFAULT_INITIAL_RATING,
+) -> pd.DataFrame:
+    """Return `results` enriched with `home_pre_elo` / `away_pre_elo` columns.
+
+    For each match (in date order), the columns hold each team's rating
+    *immediately before* the match — i.e. the freshest possible signal,
+    with no year-snapshot lookup gap.
+    """
+    df = results.dropna(subset=["home_score", "away_score"]).copy()
+    df = df.sort_values("date").reset_index(drop=True)
+
+    elo: dict[str, float] = {}
+    home_pre = np.zeros(len(df))
+    away_pre = np.zeros(len(df))
+
+    home_teams = df["home_team"].tolist()
+    away_teams = df["away_team"].tolist()
+    home_scores = df["home_score"].astype(int).tolist()
+    away_scores = df["away_score"].astype(int).tolist()
+    neutrals = df["neutral"].tolist()
+    tournaments = df["tournament"].tolist()
+
+    for i, (h, a, gh, ga, neutral, tourn) in enumerate(
+        zip(home_teams, away_teams, home_scores, away_scores, neutrals, tournaments)
+    ):
+        elo.setdefault(h, initial_rating)
+        elo.setdefault(a, initial_rating)
+        home_pre[i] = elo[h]
+        away_pre[i] = elo[a]
+
+        rh, ra = elo[h], elo[a]
+        home_adv = 0.0 if neutral else HOME_ADVANTAGE
+        dr = (rh + home_adv) - ra
+        we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
+
+        if gh > ga:
+            w_h = 1.0
+        elif gh == ga:
+            w_h = 0.5
+        else:
+            w_h = 0.0
+
+        g = _goal_diff_multiplier(gh - ga)
+        k = k_value(str(tourn))
+        delta = k * g * (w_h - we_h)
+        elo[h] = rh + delta
+        elo[a] = ra - delta
+
+    df["home_pre_elo"] = home_pre
+    df["away_pre_elo"] = away_pre
+    return df
