@@ -14,6 +14,8 @@ import numpy as np
 if TYPE_CHECKING:
     from wc2026.model.poisson import PoissonModel
 
+ActualResults = dict[tuple[str, str], tuple[int, int]]
+
 
 @dataclass
 class TeamRecord:
@@ -70,16 +72,21 @@ def simulate_group(
     teams: list[str],
     model: PoissonModel,
     rng: np.random.Generator,
+    actual_results: ActualResults | None = None,
 ) -> list[TeamRecord]:
     """Simulate all 6 round-robin matches within a group, return sorted standings."""
     records = {t: TeamRecord(t) for t in teams}
     for i, ta in enumerate(teams):
         for tb in teams[i + 1 :]:
-            from wc2026.model.poisson import MatchResult  # local import avoids cycle
+            if actual_results is not None and (ta, tb) in actual_results:
+                ga, gb = actual_results[(ta, tb)]
+            else:
+                from wc2026.model.poisson import MatchResult  # local import avoids cycle
 
-            result: MatchResult = model.simulate_match(ta, tb, rng)
-            records[ta].update(result.goals_a, result.goals_b)
-            records[tb].update(result.goals_b, result.goals_a)
+                result: MatchResult = model.simulate_match(ta, tb, rng)
+                ga, gb = result.goals_a, result.goals_b
+            records[ta].update(ga, gb)
+            records[tb].update(gb, ga)
 
     return sorted(records.values(), key=lambda r: r.sort_key(), reverse=True)
 
@@ -88,9 +95,10 @@ def simulate_group_stage(
     groups: dict[str, list[str]],
     model: PoissonModel,
     rng: np.random.Generator,
+    actual_results: ActualResults | None = None,
 ) -> dict[str, list[TeamRecord]]:
     """Return standings for each group."""
-    return {g: simulate_group(teams, model, rng) for g, teams in groups.items()}
+    return {g: simulate_group(teams, model, rng, actual_results) for g, teams in groups.items()}
 
 
 def pick_best_third_place(standings: dict[str, list[TeamRecord]], n: int = 8) -> list[str]:
@@ -157,9 +165,10 @@ def simulate_tournament(
     groups: dict[str, list[str]],
     model: PoissonModel,
     rng: np.random.Generator,
+    actual_results: ActualResults | None = None,
 ) -> tuple[str, dict[str, list[TeamRecord]]]:
     """Simulate a full tournament. Returns (winner, group_standings)."""
-    group_standings = simulate_group_stage(groups, model, rng)
+    group_standings = simulate_group_stage(groups, model, rng, actual_results)
     r32_pairs = build_knockout_bracket(group_standings)
     r16_teams = simulate_knockout_round(r32_pairs, model, rng)
     qf_teams = simulate_knockout_round(pairs_from_winners(r16_teams), model, rng)
@@ -218,13 +227,14 @@ def run_monte_carlo(
     model: PoissonModel,
     n: int = 10_000,
     seed: int | None = 42,
+    actual_results: ActualResults | None = None,
 ) -> SimulationResults:
     rng = np.random.default_rng(seed)
     results = SimulationResults(n_simulations=n)
 
     for _ in range(n):
         # Simulate group stage
-        group_standings = simulate_group_stage(groups, model, rng)
+        group_standings = simulate_group_stage(groups, model, rng, actual_results)
 
         # Track group exits
         for g_records in group_standings.values():
@@ -287,12 +297,13 @@ def simulate_full_tournament(
     model: PoissonModel,
     rng: np.random.Generator | None = None,
     seed: int | None = None,
+    actual_results: ActualResults | None = None,
 ) -> FullTournamentResult:
     """Run one complete tournament and capture every match result."""
     if rng is None:
         rng = np.random.default_rng(seed)
 
-    group_standings = simulate_group_stage(groups, model, rng)
+    group_standings = simulate_group_stage(groups, model, rng, actual_results)
     third_qualifiers = pick_best_third_place(group_standings)
     r32_pairs = build_knockout_bracket(group_standings)
 
@@ -325,6 +336,7 @@ def simulate_full_tournament(
 def predict_modal_tournament(
     groups: dict[str, list[str]],
     model: PoissonModel,
+    actual_results: ActualResults | None = None,
 ) -> FullTournamentResult:
     """Deterministic bracket: each match takes its single most probable outcome."""
 
@@ -334,7 +346,10 @@ def predict_modal_tournament(
         records = {t: TeamRecord(t) for t in teams}
         for i, ta in enumerate(teams):
             for tb in teams[i + 1 :]:
-                ga, gb, _winner, _conf = model.predict_modal_match(ta, tb, knockout=False)
+                if actual_results is not None and (ta, tb) in actual_results:
+                    ga, gb = actual_results[(ta, tb)]
+                else:
+                    ga, gb, _winner, _conf = model.predict_modal_match(ta, tb, knockout=False)
                 records[ta].update(ga, gb)
                 records[tb].update(gb, ga)
         group_standings[g] = sorted(records.values(), key=lambda r: r.sort_key(), reverse=True)
@@ -375,6 +390,7 @@ def simulate_nucleus_tournament(
     confidence: float = 0.80,
     rng: np.random.Generator | None = None,
     seed: int | None = None,
+    actual_results: ActualResults | None = None,
 ) -> FullTournamentResult:
     """Random bracket where each match samples from the top-P nucleus of its score distribution.
 
@@ -389,11 +405,15 @@ def simulate_nucleus_tournament(
         records = {t: TeamRecord(t) for t in teams}
         for i, ta in enumerate(teams):
             for tb in teams[i + 1 :]:
-                from wc2026.model.poisson import MatchResult
+                if actual_results is not None and (ta, tb) in actual_results:
+                    ga, gb = actual_results[(ta, tb)]
+                else:
+                    from wc2026.model.poisson import MatchResult
 
-                result: MatchResult = model.simulate_nucleus_match(ta, tb, confidence, rng)
-                records[ta].update(result.goals_a, result.goals_b)
-                records[tb].update(result.goals_b, result.goals_a)
+                    result: MatchResult = model.simulate_nucleus_match(ta, tb, confidence, rng)
+                    ga, gb = result.goals_a, result.goals_b
+                records[ta].update(ga, gb)
+                records[tb].update(gb, ga)
         group_standings[g] = sorted(records.values(), key=lambda r: r.sort_key(), reverse=True)
 
     third_qualifiers = pick_best_third_place(group_standings)

@@ -197,12 +197,14 @@ def simulate(
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Run a full Monte Carlo tournament simulation."""
+    from wc2026.data.loader import load_wc2026_results
     from wc2026.simulate.tournament import run_monte_carlo
 
     model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
+    actual = load_wc2026_results()
 
     with _status(f"Running {simulations:,} simulations…", quiet):
-        sim = run_monte_carlo(groups, model, n=simulations, seed=seed)
+        sim = run_monte_carlo(groups, model, n=simulations, seed=seed, actual_results=actual)
 
     ranked = sim.sorted_by_win_prob()
 
@@ -251,14 +253,15 @@ def top_scorer(
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Predict top goal scorer candidates based on recent form + team advancement probability."""
-    from wc2026.data.loader import load_goalscorers
+    from wc2026.data.loader import load_goalscorers, load_wc2026_results
     from wc2026.simulate.tournament import run_monte_carlo
 
     model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
+    actual = load_wc2026_results()
 
     with _status("Loading goalscorers and running simulations…", quiet):
         goals_df = load_goalscorers(min_year=2021)
-        sim = run_monte_carlo(groups, model, n=simulations)
+        sim = run_monte_carlo(groups, model, n=simulations, actual_results=actual)
 
     # Goals per player per international game (2021+)
     from wc2026.data.loader import SCHEDULE_TO_CANONICAL, load_results
@@ -369,15 +372,20 @@ def show_scenario(
         console.print("[red]--mode must be 'random', 'plausible', or 'modal'[/red]")
         raise typer.Exit(1)
 
+    from wc2026.data.loader import load_wc2026_results
+
     model, groups, _ = _load_and_train(half_life=half_life)
+    actual = load_wc2026_results()
 
     with console.status(f"Building {mode} scenario…"):
         if mode == "modal":
-            result = predict_modal_tournament(groups, model)
+            result = predict_modal_tournament(groups, model, actual_results=actual)
         elif mode == "plausible":
-            result = simulate_nucleus_tournament(groups, model, confidence=confidence, seed=seed)
+            result = simulate_nucleus_tournament(
+                groups, model, confidence=confidence, seed=seed, actual_results=actual
+            )
         else:
-            result = simulate_full_tournament(groups, model, seed=seed)
+            result = simulate_full_tournament(groups, model, seed=seed, actual_results=actual)
 
     with console.status("Generating HTML…"):
         html_content = generate_html(result, mode=mode)

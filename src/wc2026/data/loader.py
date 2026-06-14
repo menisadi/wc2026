@@ -68,6 +68,27 @@ def load_elo_history() -> pd.DataFrame:
     return df[["country", "year", "rating"]].reset_index(drop=True)
 
 
+def load_wc2026_results() -> dict[tuple[str, str], tuple[int, int]]:
+    """Return completed WC 2026 matches as {(team_a, team_b): (score_a, score_b)}.
+
+    Both orderings are stored so lookups succeed regardless of iteration order.
+    """
+    df = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
+    wc = df[
+        (df["tournament"] == "FIFA World Cup")
+        & (df["date"].dt.year == 2026)
+        & df["home_score"].notna()
+        & df["away_score"].notna()
+    ]
+    out: dict[tuple[str, str], tuple[int, int]] = {}
+    for _, row in wc.iterrows():
+        h, a = row["home_team"], row["away_team"]
+        hs, as_ = int(row["home_score"]), int(row["away_score"])
+        out[(h, a)] = (hs, as_)
+        out[(a, h)] = (as_, hs)
+    return out
+
+
 def load_goalscorers(min_year: int = 2018) -> pd.DataFrame:
     df = pd.read_csv(DATA_DIR / "goalscorers.csv", parse_dates=["date"])
     df = df[df["date"].dt.year >= min_year].copy()
