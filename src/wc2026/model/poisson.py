@@ -50,6 +50,9 @@ class PoissonModel:
         self._elo_train_mu: float = 0.0
         self._elo_train_sd: float = 1.0
         self._home_adv_coef: float = 0.0
+        self._elo_mean: float = 1500.0
+        self._elo_std: float = 200.0
+        self._strengths: dict[str, TeamStrength] = {}
 
     def fit(
         self,
@@ -102,7 +105,7 @@ class PoissonModel:
         w = np.zeros(n_rows)
 
         if self._has_elo_feature:
-            all_elos = np.concatenate([df["_home_elo"].values, df["_away_elo"].values])
+            all_elos = np.concatenate([df["_home_elo"].to_numpy(), df["_away_elo"].to_numpy()])
             self._elo_train_mu = float(all_elos.mean())
             self._elo_train_sd = float(all_elos.std()) or 1.0
 
@@ -112,6 +115,7 @@ class PoissonModel:
             home_adv = 0.0 if row["neutral"] else 1.0
             wt = weights[i]
 
+            hz = az = 0.0
             # Home attack row: scorer = home, conceder = away
             X[2 * i, hi] = 1
             X[2 * i, n_teams + ai] = 1
@@ -301,7 +305,7 @@ class PoissonModel:
                 else:
                     p_win_b += p
         total = p_win_a + p_draw + p_win_b
-        return p_win_a / total, p_draw / total, p_win_b / total
+        return float(p_win_a / total), float(p_draw / total), float(p_win_b / total)
 
     def predict_modal_match(
         self,
