@@ -190,7 +190,7 @@ def predict_match(
 def simulate(
     simulations: int = typer.Option(10_000, "--sims", "-n", help="Number of Monte Carlo runs"),
     top: int = typer.Option(20, "--top", help="Show top N teams"),
-    seed: int = typer.Option(42, "--seed"),
+    seed: int | None = typer.Option(None, "--seed"),
     show_groups: bool = typer.Option(False, "--groups/--no-groups", help="Print group composition"),
     csv: bool = typer.Option(False, "--csv", help="Output results as CSV"),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
@@ -339,7 +339,7 @@ def show_scenario(
             "'modal': deterministic most-probable bracket"
         ),
     ),
-    seed: int = typer.Option(42, "--seed", help="RNG seed (random and plausible modes)"),
+    seed: int | None = typer.Option(None, "--seed", help="RNG seed (random and plausible modes)"),
     confidence: float = typer.Option(
         0.80,
         "--confidence",

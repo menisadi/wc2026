@@ -226,7 +226,7 @@ def run_monte_carlo(
     groups: dict[str, list[str]],
     model: PoissonModel,
     n: int = 10_000,
-    seed: int | None = 42,
+    seed: int | None = None,
     actual_results: ActualResults | None = None,
 ) -> SimulationResults:
     rng = np.random.default_rng(seed)
