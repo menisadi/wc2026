@@ -281,23 +281,10 @@ def top_scorer(
     player_goals["team_games"] = player_goals["team"].map(lambda t: team_games.get(t, 1))
     player_goals["goals_per_game"] = player_goals["goals"] / player_goals["team_games"]
 
-    # Expected WC games: ~6.3 avg for champion (3 group + avg 3.3 KO)
-    # Estimate from simulation: expected games = sum over rounds of P(reaching that round) * games
-    # Simplified: expected_games ≈ 3 (group) + 3.3 * P(advance from group)
     all_wc_teams = {t for teams in groups.values() for t in teams}
 
-    def expected_wc_games(team: str) -> float:
-        # group exit ~ not advancing beyond group
-        group_exit_rate = sim.group_exit_counts.get(team, 0) / sim.n_simulations
-        # Very rough: 3 guaranteed group games + expected KO games
-        # P(advance) = 1 - P(exit group stage as 3rd or 4th and not best 3rd)
-        # We use P(reach SF) as proxy for quality
-        p_sf = sim.sf_prob(team)
-        p_win = sim.win_prob(team)
-        return 3.0 + 1.0 * (1 - group_exit_rate) + 1.0 * p_sf + 1.0 * p_win
-
     player_goals["expected_wc_games"] = player_goals["team"].map(
-        lambda t: expected_wc_games(t) if t in all_wc_teams else 0.0
+        lambda t: sim.expected_games(t) if t in all_wc_teams else 0.0
     )
     player_goals["expected_wc_goals"] = (
         player_goals["goals_per_game"] * player_goals["expected_wc_games"]

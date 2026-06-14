@@ -175,6 +175,9 @@ class SimulationResults:
     win_counts: dict[str, int] = field(default_factory=dict)
     final_counts: dict[str, int] = field(default_factory=dict)
     sf_counts: dict[str, int] = field(default_factory=dict)
+    qf_counts: dict[str, int] = field(default_factory=dict)
+    r16_counts: dict[str, int] = field(default_factory=dict)
+    r32_counts: dict[str, int] = field(default_factory=dict)
     group_exit_counts: dict[str, int] = field(default_factory=dict)
 
     def win_prob(self, team: str) -> float:
@@ -185,6 +188,21 @@ class SimulationResults:
 
     def sf_prob(self, team: str) -> float:
         return self.sf_counts.get(team, 0) / self.n_simulations
+
+    def expected_games(self, team: str) -> float:
+        """Expected number of games played in the tournament.
+
+        3 guaranteed group games plus one game per round reached.
+        """
+        n = self.n_simulations
+        return (
+            3.0
+            + self.r32_counts.get(team, 0) / n
+            + self.r16_counts.get(team, 0) / n
+            + self.qf_counts.get(team, 0) / n
+            + self.sf_counts.get(team, 0) / n
+            + self.final_counts.get(team, 0) / n
+        )
 
     def sorted_by_win_prob(self) -> list[tuple[str, float]]:
         teams = set(self.win_counts) | set(self.final_counts)
@@ -217,10 +235,19 @@ def run_monte_carlo(
 
         # Knockout
         r32_pairs = build_knockout_bracket(group_standings)
-        r16_teams = simulate_knockout_round(r32_pairs, model, rng)
-        qf_teams = simulate_knockout_round(pairs_from_winners(r16_teams), model, rng)
-        sf_teams = simulate_knockout_round(pairs_from_winners(qf_teams), model, rng)
+        r32_teams = [t for pair in r32_pairs for t in pair]
+        for t in r32_teams:
+            results.r32_counts[t] = results.r32_counts.get(t, 0) + 1
 
+        r16_teams = simulate_knockout_round(r32_pairs, model, rng)
+        for t in r16_teams:
+            results.r16_counts[t] = results.r16_counts.get(t, 0) + 1
+
+        qf_teams = simulate_knockout_round(pairs_from_winners(r16_teams), model, rng)
+        for t in qf_teams:
+            results.qf_counts[t] = results.qf_counts.get(t, 0) + 1
+
+        sf_teams = simulate_knockout_round(pairs_from_winners(qf_teams), model, rng)
         for t in sf_teams:
             results.sf_counts[t] = results.sf_counts.get(t, 0) + 1
 
