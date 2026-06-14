@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -27,10 +28,10 @@ def build_team_strengths(
 
     strengths: dict[str, TeamStrength] = {}
     for team in wc_teams:
-        elo_val = float(elo.loc[team, "rating"]) if team in elo.index else fallback_elo
+        elo_val = cast(float, elo.loc[team, "rating"]) if team in elo.index else fallback_elo
         if team in rankings.index:
-            rank = int(rankings.loc[team, "rank"])
-            pts = float(rankings.loc[team, "points"])
+            rank = cast(int, rankings.loc[team, "rank"])
+            pts = cast(float, rankings.loc[team, "points"])
         else:
             rank = fallback_rank
             pts = 0.0

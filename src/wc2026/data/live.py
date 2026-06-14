@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -41,7 +42,7 @@ def _get_api_key() -> str:
     return key
 
 
-def fetch_finished_matches() -> list[dict]:
+def fetch_finished_matches() -> list[dict[str, Any]]:
     """Return all FINISHED WC 2026 matches from football-data.org."""
     key = _get_api_key()
     url = f"{_API_BASE}/competitions/WC/matches?season={_WC_SEASON}&status=FINISHED"

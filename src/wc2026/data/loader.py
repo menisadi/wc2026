@@ -39,20 +39,20 @@ def load_results(min_year: int = 2010) -> pd.DataFrame:
 
 def load_schedule() -> pd.DataFrame:
     df = pd.read_csv(DATA_DIR / "schedule_2026.csv", parse_dates=["Date"])
-    df["home_team"] = df["home_team"].map(lambda t: _normalize(t, SCHEDULE_TO_CANONICAL))
-    df["away_team"] = df["away_team"].map(lambda t: _normalize(t, SCHEDULE_TO_CANONICAL))
+    df["home_team"] = df["home_team"].map(lambda t: _normalize(str(t), SCHEDULE_TO_CANONICAL))
+    df["away_team"] = df["away_team"].map(lambda t: _normalize(str(t), SCHEDULE_TO_CANONICAL))
     return df.reset_index(drop=True)
 
 
 def load_rankings() -> pd.DataFrame:
     df = pd.read_csv(DATA_DIR / "fifa_ranking_2026-06-08.csv")
-    df["team"] = df["team"].map(lambda t: _normalize(t, RANKINGS_TO_CANONICAL))
+    df["team"] = df["team"].map(lambda t: _normalize(str(t), RANKINGS_TO_CANONICAL))
     return df.set_index("team")
 
 
 def load_elo() -> pd.DataFrame:
     df = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv")
-    df["country"] = df["country"].map(lambda t: _normalize(t, ELO_TO_CANONICAL))
+    df["country"] = df["country"].map(lambda t: _normalize(str(t), ELO_TO_CANONICAL))
     # Keep only the latest snapshot per team
     latest_date = df["snapshot_date"].max()
     df = df[df["snapshot_date"] == latest_date].copy()
@@ -62,7 +62,7 @@ def load_elo() -> pd.DataFrame:
 def load_elo_history() -> pd.DataFrame:
     """One row per (country, year) using the latest snapshot of that year."""
     df = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv", parse_dates=["snapshot_date"])
-    df["country"] = df["country"].map(lambda t: _normalize(t, ELO_TO_CANONICAL))
+    df["country"] = df["country"].map(lambda t: _normalize(str(t), ELO_TO_CANONICAL))
     df["year"] = df["snapshot_date"].dt.year
     df = df.sort_values("snapshot_date").drop_duplicates(["country", "year"], keep="last")
     return df[["country", "year", "rating"]].reset_index(drop=True)

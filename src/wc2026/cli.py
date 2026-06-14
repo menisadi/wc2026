@@ -11,6 +11,7 @@ Commands:
 from __future__ import annotations
 
 from contextlib import nullcontext
+from typing import Any, cast
 
 import typer
 from rich.console import Console
@@ -25,7 +26,7 @@ def _status(msg: str, quiet: bool):
     return nullcontext() if quiet else err_console.status(msg)
 
 
-def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
+def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple[Any, Any, Any]:
     """Load all data, build features, train Poisson model. Returns (model, groups, strengths)."""
     from wc2026.data.elo import load_or_compute_elo_history
     from wc2026.data.loader import (
@@ -273,7 +274,7 @@ def top_scorer(
     team_games = home_games.add(away_games, fill_value=0)
 
     # Apply canonical mapping to goal scorer teams
-    goals_df["team"] = goals_df["team"].map(lambda t: SCHEDULE_TO_CANONICAL.get(t, t))
+    goals_df["team"] = goals_df["team"].map(lambda t: SCHEDULE_TO_CANONICAL.get(str(t), str(t)))
 
     player_goals = goals_df.groupby(["scorer", "team"], as_index=False).agg(
         goals=("scorer", "count")
@@ -287,7 +288,7 @@ def top_scorer(
     all_wc_teams = {t for teams in groups.values() for t in teams}
 
     player_goals["expected_wc_games"] = player_goals["team"].map(
-        lambda t: sim.expected_games(t) if t in all_wc_teams else 0.0
+        lambda t: sim.expected_games(str(t)) if t in all_wc_teams else 0.0
     )
     player_goals["expected_wc_goals"] = (
         player_goals["goals_per_game"] * player_goals["expected_wc_games"]
@@ -301,7 +302,7 @@ def top_scorer(
         print("rank,player,team,goals,goals_per_game,expected_wc_goals")
         for i, row in enumerate(player_goals.itertuples(), 1):
             print(
-                f"{i},{row.scorer},{row.team},{int(row.goals)},{row.goals_per_game:.4f},{row.expected_wc_goals:.4f}"
+                f"{i},{row.scorer},{row.team},{cast(int, row.goals)},{row.goals_per_game:.4f},{row.expected_wc_goals:.4f}"
             )
         return
 
@@ -318,9 +319,9 @@ def top_scorer(
     for i, row in enumerate(player_goals.itertuples(), 1):
         table.add_row(
             str(i),
-            row.scorer,
-            row.team,
-            str(int(row.goals)),
+            str(row.scorer),
+            str(row.team),
+            str(cast(int, row.goals)),
             f"{row.goals_per_game:.3f}",
             f"{row.expected_wc_goals:.2f}",
         )

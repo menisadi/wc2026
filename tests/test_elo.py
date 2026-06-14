@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import pandas as pd
 import pytest
 
@@ -10,7 +12,7 @@ from wc2026.data.elo import (
 )
 
 
-def _toy(rows: list[dict]) -> pd.DataFrame:
+def _toy(rows: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
     return df
@@ -113,8 +115,8 @@ def test_compute_elo_world_cup_moves_more_than_friendly() -> None:
         ]
     )
     assert (
-        compute_elo_history(wc).set_index("country").loc["A", "rating"]
-        - compute_elo_history(fr).set_index("country").loc["A", "rating"]
+        cast(float, compute_elo_history(wc).set_index("country").loc["A", "rating"])
+        - cast(float, compute_elo_history(fr).set_index("country").loc["A", "rating"])
         == pytest.approx(20.0)  # delta_WC=30, delta_FR=10, diff=20
     )
 

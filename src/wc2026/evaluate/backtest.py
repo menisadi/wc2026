@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 import numpy as np
 import pandas as pd
@@ -52,7 +52,7 @@ def _wdl_from_xg(xg_h: float, xg_a: float, max_goals: int = 10) -> tuple[float, 
             else:
                 p_a += p
     total = p_h + p_d + p_a
-    return p_h / total, p_d / total, p_a / total
+    return float(p_h / total), float(p_d / total), float(p_a / total)
 
 
 class Predictor(Protocol):
@@ -184,7 +184,7 @@ class PoissonPredictor:
             strengths = {
                 str(row.country): TeamStrength(
                     name=str(row.country),
-                    elo=float(row.rating),
+                    elo=cast(float, row.rating),
                     fifa_rank=200,
                     fifa_points=0.0,
                 )
@@ -254,7 +254,7 @@ def walk_forward(
     if not eval_years:
         raise ValueError(f"No matches found in/after {since_year}.")
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     for y in eval_years:
         train = df[df["year"] < y].drop(columns="year")
         test = df[df["year"] == y].drop(columns="year").reset_index(drop=True)
