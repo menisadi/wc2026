@@ -30,7 +30,6 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
     from wc2026.data.elo import load_or_compute_elo_history
     from wc2026.data.loader import (
         extract_groups,
-        load_elo,
         load_rankings,
         load_results,
         load_schedule,
@@ -42,10 +41,16 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple:
         results = load_results(min_year=2010)
         schedule = load_schedule()
         rankings = load_rankings()
-        elo = load_elo()
         # Self-computed ELO covers all 321 teams (vs ~48 in the bundled file).
         # Cached to data/elo_history_computed.csv; refresh-data regenerates it.
         elo_history = load_or_compute_elo_history()
+        # Latest computed rating per team — used for predict-time fallback. Must
+        # match the source used in training (elo_history) to keep _elo_z consistent.
+        elo = (
+            elo_history.sort_values("year")
+            .drop_duplicates("country", keep="last")
+            .set_index("country")
+        )
         groups = extract_groups(schedule)
 
     all_wc_teams = [t for teams in groups.values() for t in teams]
