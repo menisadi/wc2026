@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""WC 2026 winner predictor — single-file reference.
-
-Reads CSVs from data/raw/, fits a Poisson model, runs Monte Carlo, prints results.
-
-  uv run python poc.py
-  uv run python poc.py --sims 20000
-"""
+"""WC 2026 winner predictor — single-file reference."""
 
 import argparse
 from collections import Counter, defaultdict
