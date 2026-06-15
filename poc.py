@@ -14,7 +14,7 @@ from sklearn.linear_model import PoissonRegressor
 
 DATA_DIR = Path(__file__).parent / "data" / "raw"
 
-# Name normalization: schedule/ranking CSV variants → results.csv canonical names
+# Name normalization: schedule CSV variants → results.csv canonical names
 SCHEDULE_NORM: dict[str, str] = {
     "Bosnia-Herzegovina": "Bosnia and Herzegovina",
     "Congo DR": "DR Congo",
@@ -24,7 +24,6 @@ SCHEDULE_NORM: dict[str, str] = {
     "Korea Republic": "South Korea",
     "Türkiye": "Turkey",
 }
-RANKINGS_NORM: dict[str, str] = {"USA": "United States", "Cabo Verde": "Cape Verde"}
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -241,13 +240,6 @@ class PoissonModel:
     def play(self, a: str, b: str, rng: np.random.Generator) -> tuple[int, int]:
         xa, xb = self.xg(a, b)
         return int(rng.poisson(xa)), int(rng.poisson(xb))
-
-    def knockout(self, a: str, b: str, rng: np.random.Generator) -> str:
-        """Simulate a knockout match; draws go to penalties (50/50)."""
-        ga, gb = self.play(a, b, rng)
-        if ga != gb:
-            return a if ga > gb else b
-        return a if rng.random() < 0.5 else b
 
 
 # ── Tournament ────────────────────────────────────────────────────────────────
