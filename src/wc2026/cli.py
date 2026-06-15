@@ -705,11 +705,21 @@ def backfill_snapshots(
 def show_history(
     team: str | None = typer.Option(None, "--team", "-t", help="Show all snapshots for one team"),
     top: int = typer.Option(10, "--top", help="Show top N teams (by latest win %)"),
+    compare: str = typer.Option(
+        "prev",
+        "--compare",
+        "-c",
+        help="Reference for Δ column: 'prev' (previous snapshot) or 'first' (start of tournament)",
+    ),
 ) -> None:
     """Show how win probabilities have changed across snapshots."""
     from pathlib import Path
 
     import pandas as pd
+
+    if compare not in ("prev", "first"):
+        console.print("[red]--compare must be 'prev' or 'first'[/red]")
+        raise typer.Exit(1)
 
     history_path = Path(__file__).parents[2] / "data" / "probability_history.csv"
     if not history_path.exists():
@@ -740,29 +750,33 @@ def show_history(
         return
 
     latest_date = dates[-1]
-    prev_date = dates[-2] if len(dates) >= 2 else None
+    if compare == "first":
+        ref_date = dates[0] if len(dates) >= 2 else None
+    else:
+        ref_date = dates[-2] if len(dates) >= 2 else None
     latest = df[df["date"] == latest_date].set_index("team")
-    prev = df[df["date"] == prev_date].set_index("team") if prev_date else None
+    ref = df[df["date"] == ref_date].set_index("team") if ref_date else None
 
     top_teams = latest.nlargest(top, "win_pct")
 
     title = f"Win probabilities — {latest_date}"
-    if prev_date:
-        title += f" (vs {prev_date})"
+    if ref_date:
+        label = "tournament start" if compare == "first" else ref_date
+        title += f" (vs {label})"
     table = Table(title=title, show_header=True)
     table.add_column("Rank", style="dim")
     table.add_column("Team", style="bold")
     table.add_column("Win %", justify="right", style="green")
-    if prev is not None:
+    if ref is not None:
         table.add_column("Δ Win %", justify="right")
     table.add_column("Final %", justify="right")
     table.add_column("Semi %", justify="right")
 
     for i, (t, row) in enumerate(top_teams.iterrows(), 1):
         cells = [str(i), str(t), f"{row['win_pct']:.1%}"]
-        if prev is not None:
-            if t in prev.index:
-                d = row["win_pct"] - prev.loc[t, "win_pct"]
+        if ref is not None:
+            if t in ref.index:
+                d = row["win_pct"] - ref.loc[t, "win_pct"]
                 if d > 0:
                     cells.append(f"[green]+{d:.1%}[/green]")
                 elif d < 0:
