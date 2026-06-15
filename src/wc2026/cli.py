@@ -66,6 +66,17 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple[Any, A
     return model, groups, strengths
 
 
+_STAGE_POINTS: dict[str, tuple[int, int]] = {
+    "group": (1, 3),
+    "r32": (2, 5),
+    "r16": (2, 5),
+    "qf": (4, 8),
+    "sf": (5, 10),
+    "3rd": (5, 10),
+    "final": (8, 15),
+}
+
+
 @app.command("predict-match")
 def predict_match(
     team_a: str = typer.Argument(None, help="First team (use canonical name)"),
@@ -81,12 +92,20 @@ def predict_match(
     ev: bool = typer.Option(
         False,
         "--ev/--no-ev",
-        help="Rank scorelines by expected value (1pt for correct W/D/L, 3pt for exact score)",
+        help="Rank scorelines by expected value using stage-appropriate points.",
+    ),
+    stage: str = typer.Option(
+        "group",
+        "--stage",
+        help=("Tournament stage for EV scoring: group | r32 | r16 | qf | sf | 3rd | final"),
     ),
 ) -> None:
     """Predict the outcome of a single match between TEAM_A and TEAM_B."""
     from wc2026.data.loader import SCHEDULE_TO_CANONICAL, load_schedule
 
+    if stage not in _STAGE_POINTS:
+        console.print(f"[red]--stage must be one of: {', '.join(_STAGE_POINTS)}[/red]")
+        raise typer.Exit(1)
     if game is not None and (team_a is not None or team_b is not None):
         console.print("[red]Pass either --game or TEAM_A/TEAM_B, not both.[/red]")
         raise typer.Exit(1)
@@ -147,6 +166,7 @@ def predict_match(
         score_counts[k] = score_counts.get(k, 0) + 1
 
     if ev:
+        dir_pts, exact_pts = _STAGE_POINTS[stage]
 
         def score_ev(ga: int, gb: int, p_exact: float) -> float:
             if ga > gb:
@@ -155,7 +175,7 @@ def predict_match(
                 p_dir = p_d
             else:
                 p_dir = p_b
-            return p_dir + 2 * p_exact
+            return p_dir * dir_pts + p_exact * (exact_pts - dir_pts)
 
         ranked = sorted(
             score_counts.items(),
@@ -168,7 +188,7 @@ def predict_match(
             f"\n[bold green]Best EV bet:[/bold green] {best_ga}–{best_gb} (EV {best_ev:.2f})"
         )
 
-        table = Table(title="Top scorelines by expected value", show_header=True)
+        table = Table(title=f"Top scorelines by expected value ({stage})", show_header=True)
         table.add_column("Score", style="bold")
         table.add_column("Probability", justify="right")
         table.add_column("EV", justify="right", style="green")
@@ -302,7 +322,8 @@ def top_scorer(
         print("rank,player,team,goals,goals_per_game,expected_wc_goals")
         for i, row in enumerate(player_goals.itertuples(), 1):
             print(
-                f"{i},{row.scorer},{row.team},{cast(int, row.goals)},{row.goals_per_game:.4f},{row.expected_wc_goals:.4f}"
+                f"{i},{row.scorer},{row.team},{cast(int, row.goals)},"
+                f"{row.goals_per_game:.4f},{row.expected_wc_goals:.4f}"
             )
         return
 
