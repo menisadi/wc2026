@@ -359,17 +359,24 @@ def cmd_summary(args: argparse.Namespace, records: pd.DataFrame, console: Consol
             )
 
 
+def _win_prob(elo_gap: float) -> float:
+    """Expected win probability for the team with the given ELO advantage."""
+    return 1.0 / (1.0 + 10.0 ** (-elo_gap / 400.0))
+
+
 def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Console) -> None:
     team = args.team
     metric: str = args.metric
-    thresholds: list[float] = sorted(args.thresholds)
-    tier_labels = ["Weak", "Mid", "Strong", "Elite"]
+    g1, g2 = sorted(args.gaps)  # e.g. 100, 250
 
-    bands: list[tuple[str, float | None, float | None]] = [
-        (tier_labels[3], thresholds[2], None),
-        (tier_labels[2], thresholds[1], thresholds[2]),
-        (tier_labels[1], thresholds[0], thresholds[1]),
-        (tier_labels[0], None, thresholds[0]),
+    # 5 symmetric tiers from dominant favourite to heavy underdog
+    # Each band: (label, win_exp_label, gap_lo_inclusive, gap_hi_exclusive)
+    bands: list[tuple[str, str, float | None, float | None]] = [
+        ("Dominant", f">{_win_prob(g2):.0%}", g2, None),
+        ("Favored", f"{_win_prob(g1):.0%}–{_win_prob(g2):.0%}", g1, g2),
+        ("Even", f"{_win_prob(-g1):.0%}–{_win_prob(g1):.0%}", -g1, g1),
+        ("Underdog", f"{_win_prob(-g2):.0%}–{_win_prob(-g1):.0%}", -g2, -g1),
+        ("Heavy und.", f"<{_win_prob(-g2):.0%}", None, -g2),
     ]
 
     mask = (records["home_team"] == team) | (records["away_team"] == team)
@@ -384,20 +391,22 @@ def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Consol
         return
 
     t_home = subset["home_team"] == team
+    subset["t_elo"] = subset["elo_home"].where(t_home, subset["elo_away"])
     subset["opp_elo"] = subset["elo_away"].where(t_home, subset["elo_home"])
+    subset["elo_gap"] = subset["t_elo"] - subset["opp_elo"]
     subset["t_expected"] = subset["home_expected"].where(t_home, 1.0 - subset["home_expected"])
     subset["t_actual"] = subset["home_actual"].where(t_home, 1.0 - subset["home_actual"])
     subset["t_residual"] = subset["residual"].where(t_home, -subset["residual"])
     subset["t_gf"] = subset["home_score"].where(t_home, subset["away_score"])
     subset["t_ga"] = subset["away_score"].where(t_home, subset["home_score"])
 
-    def _band_mask(df: pd.DataFrame, lo: float | None, hi: float | None) -> tuple[pd.Series, str]:
+    def _band_mask(df: pd.DataFrame, lo: float | None, hi: float | None) -> pd.Series:
         if lo is None and hi is not None:
-            return df["opp_elo"] < hi, f"< {int(hi)}"
+            return df["elo_gap"] < hi
         if hi is None and lo is not None:
-            return df["opp_elo"] >= lo, f"≥ {int(lo)}"
+            return df["elo_gap"] >= lo
         assert lo is not None and hi is not None
-        return (df["opp_elo"] >= lo) & (df["opp_elo"] < hi), f"{int(lo)}–{int(hi)}"
+        return (df["elo_gap"] >= lo) & (df["elo_gap"] < hi)
 
     def _stats(df: pd.DataFrame) -> dict:
         eff = float(df["weight"].sum())
@@ -417,9 +426,9 @@ def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Consol
             "avg_gd": float((df["t_gf"] - df["t_ga"]).mean()),
         }
 
-    def _cells(label: str, elo_range: str, s: dict) -> tuple[list[str], str]:
+    def _cells(label: str, win_exp: str, s: dict) -> tuple[list[str], str]:
         style = "green" if s["z"] > 1.96 else "red" if s["z"] < -1.96 else ""
-        row = [label, elo_range, str(s["n"]), f"{s['eff']:.1f}"]
+        row = [label, win_exp, str(s["n"]), f"{s['eff']:.1f}"]
         if metric in ("wdl", "both"):
             row += [
                 f"{s['wins']}/{s['draws']}/{s['losses']}",
@@ -432,9 +441,12 @@ def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Consol
             row += [f"{s['avg_gf']:.2f}", f"{s['avg_ga']:.2f}", f"{s['avg_gd']:+.2f}"]
         return row, style
 
-    t = Table(title=f"{team} — performance by opponent ELO tier", box=box.SIMPLE)
+    t = Table(
+        title=f"{team} — performance by match competitiveness  (gaps ±{int(g1)} / ±{int(g2)} ELO)",
+        box=box.SIMPLE,
+    )
     t.add_column("Tier")
-    t.add_column("ELO range", justify="right")
+    t.add_column("Win exp.", justify="right")
     t.add_column("Games", justify="right")
     t.add_column("Eff. games", justify="right")
     if metric in ("wdl", "both"):
@@ -448,12 +460,11 @@ def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Consol
         t.add_column("Avg GA", justify="right")
         t.add_column("Avg GD", justify="right")
 
-    for label, lo, hi in bands:
-        bm, elo_range = _band_mask(subset, lo, hi)
-        tier_df = subset[bm]
+    for label, win_exp, lo, hi in bands:
+        tier_df = subset[_band_mask(subset, lo, hi)]
         if len(tier_df) == 0:
             continue
-        cells, style = _cells(label, elo_range, _stats(tier_df))
+        cells, style = _cells(label, win_exp, _stats(tier_df))
         t.add_row(*cells, style=style)
 
     t.add_section()
@@ -550,12 +561,15 @@ def main() -> None:
     prp = sub.add_parser("profile", help="Performance breakdown by opponent ELO tier.")
     prp.add_argument("team", metavar="TEAM")
     prp.add_argument(
-        "--thresholds",
-        nargs=3,
+        "--gaps",
+        nargs=2,
         type=float,
-        default=[1500.0, 1650.0, 1800.0],
+        default=[100.0, 250.0],
         metavar="N",
-        help="Three ELO breakpoints defining Weak/Mid/Strong/Elite (default: 1500 1650 1800).",
+        help=(
+            "Two ELO gap thresholds separating Even / Favored / Dominant bands "
+            "(default: 100 250, corresponding to ~64%% and ~81%% win probability)."
+        ),
     )
     prp.add_argument(
         "--metric",
