@@ -192,6 +192,14 @@ class PoissonModel:
         """Return (xg_a, xg_b). `home_adv` ∈ [0, 1] scales the trained home boost on team_a.
 
         Default 0.0 → neutral venue (the WC regime). Pass 1.0 when team_a is the home side.
+
+        # TODO: add `is_knockout: bool = False` parameter and multiply both xg values by a
+        # scaling factor (~0.85) when True. Backtest shows knockout matches are underpredicted
+        # for draws by ~4pp vs group stage (32.5% actual vs 28.4% predicted at 90 min), likely
+        # due to tactical caution not captured by team strengths. Lower xG raises p_draw
+        # naturally and also shifts exact-score distribution toward 0-0/1-1, fixing EV ranking.
+        # Validate the factor across Euro/Copa/AFCON before committing; propagate the flag
+        # through simulate_match, win_draw_loss_probs, and the tournament simulator.
         """
         assert self._fitted
         atk_a, def_a = self._get_attack_defense(team_a)
