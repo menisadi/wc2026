@@ -361,10 +361,10 @@ def cmd_summary(args: argparse.Namespace, records: pd.DataFrame, console: Consol
 
 def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Console) -> None:
     team = args.team
+    metric: str = args.metric
     thresholds: list[float] = sorted(args.thresholds)
     tier_labels = ["Weak", "Mid", "Strong", "Elite"]
 
-    # Build 4 tier bands from 3 thresholds, displayed Elite-first
     bands: list[tuple[str, float | None, float | None]] = [
         (tier_labels[3], thresholds[2], None),
         (tier_labels[2], thresholds[1], thresholds[2]),
@@ -388,86 +388,77 @@ def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Consol
     subset["t_expected"] = subset["home_expected"].where(t_home, 1.0 - subset["home_expected"])
     subset["t_actual"] = subset["home_actual"].where(t_home, 1.0 - subset["home_actual"])
     subset["t_residual"] = subset["residual"].where(t_home, -subset["residual"])
+    subset["t_gf"] = subset["home_score"].where(t_home, subset["away_score"])
+    subset["t_ga"] = subset["away_score"].where(t_home, subset["home_score"])
 
-    t = Table(
-        title=f"{team} — performance by opponent ELO tier",
-        box=box.SIMPLE,
-    )
+    def _band_mask(df: pd.DataFrame, lo: float | None, hi: float | None) -> tuple[pd.Series, str]:
+        if lo is None and hi is not None:
+            return df["opp_elo"] < hi, f"< {int(hi)}"
+        if hi is None and lo is not None:
+            return df["opp_elo"] >= lo, f"≥ {int(lo)}"
+        assert lo is not None and hi is not None
+        return (df["opp_elo"] >= lo) & (df["opp_elo"] < hi), f"{int(lo)}–{int(hi)}"
+
+    def _stats(df: pd.DataFrame) -> dict:
+        eff = float(df["weight"].sum())
+        wmean = float((df["t_residual"] * df["weight"]).sum() / eff)
+        return {
+            "n": len(df),
+            "eff": eff,
+            "wins": int((df["t_actual"] == 1.0).sum()),
+            "draws": int((df["t_actual"] == 0.5).sum()),
+            "losses": int((df["t_actual"] == 0.0).sum()),
+            "mean_exp": float(df["t_expected"].mean()),
+            "mean_act": float(df["t_actual"].mean()),
+            "wmean": wmean,
+            "z": wmean / (0.5 / math.sqrt(eff)),
+            "avg_gf": float(df["t_gf"].mean()),
+            "avg_ga": float(df["t_ga"].mean()),
+            "avg_gd": float((df["t_gf"] - df["t_ga"]).mean()),
+        }
+
+    def _cells(label: str, elo_range: str, s: dict) -> tuple[list[str], str]:
+        style = "green" if s["z"] > 1.96 else "red" if s["z"] < -1.96 else ""
+        row = [label, elo_range, str(s["n"]), f"{s['eff']:.1f}"]
+        if metric in ("wdl", "both"):
+            row += [
+                f"{s['wins']}/{s['draws']}/{s['losses']}",
+                f"{s['mean_exp']:.1%}",
+                f"{s['mean_act']:.1%}",
+                f"{s['wmean']:+.3f}",
+                f"{s['z']:+.2f}",
+            ]
+        if metric in ("goals", "both"):
+            row += [f"{s['avg_gf']:.2f}", f"{s['avg_ga']:.2f}", f"{s['avg_gd']:+.2f}"]
+        return row, style
+
+    t = Table(title=f"{team} — performance by opponent ELO tier", box=box.SIMPLE)
     t.add_column("Tier")
     t.add_column("ELO range", justify="right")
     t.add_column("Games", justify="right")
     t.add_column("Eff. games", justify="right")
-    t.add_column("W/D/L", justify="center")
-    t.add_column("Exp win%", justify="right")
-    t.add_column("Act win%", justify="right")
-    t.add_column("W.mean resid.", justify="right")
-    t.add_column("z", justify="right")
-
-    def _add_tier_row(label: str, lo: float | None, hi: float | None, df: pd.DataFrame) -> None:
-        if lo is None and hi is not None:
-            band_mask = df["opp_elo"] < hi
-            elo_range = f"< {int(hi)}"
-        elif hi is None and lo is not None:
-            band_mask = df["opp_elo"] >= lo
-            elo_range = f"≥ {int(lo)}"
-        else:
-            assert lo is not None and hi is not None
-            band_mask = (df["opp_elo"] >= lo) & (df["opp_elo"] < hi)
-            elo_range = f"{int(lo)}–{int(hi)}"
-
-        tier_df = df[band_mask]
-        if len(tier_df) == 0:
-            return
-
-        n = len(tier_df)
-        eff = float(tier_df["weight"].sum())
-        wins = int((tier_df["t_actual"] == 1.0).sum())
-        draws = int((tier_df["t_actual"] == 0.5).sum())
-        losses = int((tier_df["t_actual"] == 0.0).sum())
-        mean_exp = float(tier_df["t_expected"].mean())
-        mean_act = float(tier_df["t_actual"].mean())
-        wmean = float((tier_df["t_residual"] * tier_df["weight"]).sum() / eff)
-        z = wmean / (0.5 / math.sqrt(eff))
-        style = "green" if z > 1.96 else "red" if z < -1.96 else ""
-
-        t.add_row(
-            label,
-            elo_range,
-            str(n),
-            f"{eff:.1f}",
-            f"{wins}/{draws}/{losses}",
-            f"{mean_exp:.1%}",
-            f"{mean_act:.1%}",
-            f"{wmean:+.3f}",
-            f"{z:+.2f}",
-            style=style,
-        )
+    if metric in ("wdl", "both"):
+        t.add_column("W/D/L", justify="center")
+        t.add_column("Exp win%", justify="right")
+        t.add_column("Act win%", justify="right")
+        t.add_column("W.mean resid.", justify="right")
+        t.add_column("z", justify="right")
+    if metric in ("goals", "both"):
+        t.add_column("Avg GF", justify="right")
+        t.add_column("Avg GA", justify="right")
+        t.add_column("Avg GD", justify="right")
 
     for label, lo, hi in bands:
-        _add_tier_row(label, lo, hi, subset)
+        bm, elo_range = _band_mask(subset, lo, hi)
+        tier_df = subset[bm]
+        if len(tier_df) == 0:
+            continue
+        cells, style = _cells(label, elo_range, _stats(tier_df))
+        t.add_row(*cells, style=style)
 
-    # Total row
-    n_total = len(subset)
-    eff_total = float(subset["weight"].sum())
-    w_total = int((subset["t_actual"] == 1.0).sum())
-    d_total = int((subset["t_actual"] == 0.5).sum())
-    l_total = int((subset["t_actual"] == 0.0).sum())
-    exp_total = float(subset["t_expected"].mean())
-    act_total = float(subset["t_actual"].mean())
-    wmean_total = float((subset["t_residual"] * subset["weight"]).sum() / eff_total)
-    z_total = wmean_total / (0.5 / math.sqrt(eff_total))
     t.add_section()
-    t.add_row(
-        "Total",
-        "all",
-        str(n_total),
-        f"{eff_total:.1f}",
-        f"{w_total}/{d_total}/{l_total}",
-        f"{exp_total:.1%}",
-        f"{act_total:.1%}",
-        f"{wmean_total:+.3f}",
-        f"{z_total:+.2f}",
-    )
+    total_cells, _ = _cells("Total", "all", _stats(subset))
+    t.add_row(*total_cells)
 
     console.print(t)
 
@@ -565,6 +556,12 @@ def main() -> None:
         default=[1500.0, 1650.0, 1800.0],
         metavar="N",
         help="Three ELO breakpoints defining Weak/Mid/Strong/Elite (default: 1500 1650 1800).",
+    )
+    prp.add_argument(
+        "--metric",
+        choices=["wdl", "goals", "both"],
+        default="wdl",
+        help="Columns to show: wdl (default), goals (GF/GA/GD), or both.",
     )
 
     args = parser.parse_args()
