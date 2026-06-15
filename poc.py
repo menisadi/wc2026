@@ -52,6 +52,24 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]
     return results, schedule, elo, elo_history
 
 
+def load_wc2026_results() -> dict[tuple[str, str], tuple[int, int]]:
+    """Already-played WC 2026 matches as {(home, away): (hs, as)} (both orderings)."""
+    df = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
+    wc = df[
+        (df["tournament"] == "FIFA World Cup")
+        & (df["date"].dt.year == 2026)
+        & df["home_score"].notna()
+        & df["away_score"].notna()
+    ]
+    out: dict[tuple[str, str], tuple[int, int]] = {}
+    for _, row in wc.iterrows():
+        h, a = str(row["home_team"]), str(row["away_team"])
+        hs, as_ = int(row["home_score"]), int(row["away_score"])
+        out[(h, a)] = (hs, as_)
+        out[(a, h)] = (as_, hs)
+    return out
+
+
 def extract_groups(schedule: pd.DataFrame) -> dict[str, list[str]]:
     """Cluster group-stage opponents into 12 groups of 4 by connected components."""
     adj: dict[str, set[str]] = defaultdict(set)
@@ -246,11 +264,19 @@ class Standing:
         return (self.pts, self.gd, self.gf)
 
 
-def sim_group(teams: list[str], model: PoissonModel, rng: np.random.Generator) -> list[Standing]:
+def sim_group(
+    teams: list[str],
+    model: PoissonModel,
+    rng: np.random.Generator,
+    actual: dict[tuple[str, str], tuple[int, int]] | None = None,
+) -> list[Standing]:
     recs = {t: Standing(t) for t in teams}
     for i, a in enumerate(teams):
         for b in teams[i + 1 :]:
-            ga, gb = model.play(a, b, rng)
+            if actual is not None and (a, b) in actual:
+                ga, gb = actual[(a, b)]
+            else:
+                ga, gb = model.play(a, b, rng)
             recs[a].gf += ga
             recs[a].gd += ga - gb
             recs[b].gf += gb
@@ -284,23 +310,40 @@ def build_bracket(standings: dict[str, list[Standing]]) -> list[tuple[str, str]]
 
 
 def sim_knockout_round(
-    teams: list[str], model: PoissonModel, rng: np.random.Generator
+    teams: list[str],
+    model: PoissonModel,
+    rng: np.random.Generator,
+    actual: dict[tuple[str, str], tuple[int, int]] | None = None,
 ) -> list[str]:
-    return [model.knockout(teams[i], teams[i + 1], rng) for i in range(0, len(teams), 2)]
+    winners: list[str] = []
+    for i in range(0, len(teams), 2):
+        a, b = teams[i], teams[i + 1]
+        if actual is not None and (a, b) in actual:
+            ga, gb = actual[(a, b)]
+        else:
+            ga, gb = model.play(a, b, rng)
+        if ga != gb:
+            winners.append(a if ga > gb else b)
+        else:
+            winners.append(a if rng.random() < 0.5 else b)
+    return winners
 
 
 def sim_tournament(
-    groups: dict[str, list[str]], model: PoissonModel, rng: np.random.Generator
+    groups: dict[str, list[str]],
+    model: PoissonModel,
+    rng: np.random.Generator,
+    actual: dict[tuple[str, str], tuple[int, int]] | None = None,
 ) -> str:
-    standings = {g: sim_group(teams, model, rng) for g, teams in groups.items()}
+    standings = {g: sim_group(teams, model, rng, actual) for g, teams in groups.items()}
     r32_pairs = build_bracket(standings)
     r32_teams = [t for pair in r32_pairs for t in pair]  # flatten to ordered list
 
-    r16 = sim_knockout_round(r32_teams, model, rng)  # 32 → 16
-    qf = sim_knockout_round(r16, model, rng)  # 16 → 8
-    sf = sim_knockout_round(qf, model, rng)  # 8  → 4
-    f = sim_knockout_round(sf, model, rng)  # 4  → 2
-    return sim_knockout_round(f, model, rng)[0]  # 2  → champion
+    r16 = sim_knockout_round(r32_teams, model, rng, actual)  # 32 → 16
+    qf = sim_knockout_round(r16, model, rng, actual)  # 16 → 8
+    sf = sim_knockout_round(qf, model, rng, actual)  # 8  → 4
+    f = sim_knockout_round(sf, model, rng, actual)  # 4  → 2
+    return sim_knockout_round(f, model, rng, actual)[0]  # 2  → champion
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -312,6 +355,7 @@ def main() -> None:
     _ = parser.add_argument("--top", type=int, default=10, help="teams to display")
     _ = parser.add_argument("--csv", action="store_true", help="output results as CSV")
     _ = parser.add_argument("--quiet", action="store_true", help="suppress progress messages")
+    _ = parser.add_argument("--seed", type=int, default=None, help="RNG seed for reproducibility")
     _ = parser.add_argument(
         "--half-life",
         type=float,
@@ -325,6 +369,7 @@ def main() -> None:
         print("Loading data…")
     results, schedule, elo, elo_history = load_data()
     groups = extract_groups(schedule)
+    actual = load_wc2026_results()
 
     wc_teams = [t for teams in groups.values() for t in teams]
     elo_wc = elo[elo.index.isin(wc_teams)]
@@ -335,8 +380,10 @@ def main() -> None:
 
     if not args.quiet:
         print(f"Running {args.sims:,} simulations…")
-    rng = np.random.default_rng(42)
-    wins: Counter[str] = Counter(sim_tournament(groups, model, rng) for _ in range(args.sims))
+    rng = np.random.default_rng(args.seed)
+    wins: Counter[str] = Counter(
+        sim_tournament(groups, model, rng, actual) for _ in range(args.sims)
+    )
 
     if args.csv:
         print("rank,team,pct")
