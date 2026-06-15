@@ -359,8 +359,136 @@ def cmd_summary(args: argparse.Namespace, records: pd.DataFrame, console: Consol
             )
 
 
+def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Console) -> None:
+    team = args.team
+    thresholds: list[float] = sorted(args.thresholds)
+    tier_labels = ["Weak", "Mid", "Strong", "Elite"]
+
+    # Build 4 tier bands from 3 thresholds, displayed Elite-first
+    bands: list[tuple[str, float | None, float | None]] = [
+        (tier_labels[3], thresholds[2], None),
+        (tier_labels[2], thresholds[1], thresholds[2]),
+        (tier_labels[1], thresholds[0], thresholds[1]),
+        (tier_labels[0], None, thresholds[0]),
+    ]
+
+    mask = (records["home_team"] == team) | (records["away_team"] == team)
+    subset = records[mask].copy()
+
+    if subset.empty:
+        console.print(f"[red]No matches found for '{team}'.[/red]")
+        known = sorted(set(records["home_team"]) | set(records["away_team"]))
+        close = [n for n in known if team.lower() in n.lower()]
+        if close:
+            console.print(f"[dim]Did you mean: {', '.join(close[:5])}?[/dim]")
+        return
+
+    t_home = subset["home_team"] == team
+    subset["opp_elo"] = subset["elo_away"].where(t_home, subset["elo_home"])
+    subset["t_expected"] = subset["home_expected"].where(t_home, 1.0 - subset["home_expected"])
+    subset["t_actual"] = subset["home_actual"].where(t_home, 1.0 - subset["home_actual"])
+    subset["t_residual"] = subset["residual"].where(t_home, -subset["residual"])
+
+    t = Table(
+        title=f"{team} — performance by opponent ELO tier",
+        box=box.SIMPLE,
+    )
+    t.add_column("Tier")
+    t.add_column("ELO range", justify="right")
+    t.add_column("Games", justify="right")
+    t.add_column("Eff. games", justify="right")
+    t.add_column("W/D/L", justify="center")
+    t.add_column("Exp win%", justify="right")
+    t.add_column("Act win%", justify="right")
+    t.add_column("W.mean resid.", justify="right")
+    t.add_column("z", justify="right")
+
+    def _add_tier_row(label: str, lo: float | None, hi: float | None, df: pd.DataFrame) -> None:
+        if lo is None and hi is not None:
+            band_mask = df["opp_elo"] < hi
+            elo_range = f"< {int(hi)}"
+        elif hi is None and lo is not None:
+            band_mask = df["opp_elo"] >= lo
+            elo_range = f"≥ {int(lo)}"
+        else:
+            assert lo is not None and hi is not None
+            band_mask = (df["opp_elo"] >= lo) & (df["opp_elo"] < hi)
+            elo_range = f"{int(lo)}–{int(hi)}"
+
+        tier_df = df[band_mask]
+        if len(tier_df) == 0:
+            return
+
+        n = len(tier_df)
+        eff = float(tier_df["weight"].sum())
+        wins = int((tier_df["t_actual"] == 1.0).sum())
+        draws = int((tier_df["t_actual"] == 0.5).sum())
+        losses = int((tier_df["t_actual"] == 0.0).sum())
+        mean_exp = float(tier_df["t_expected"].mean())
+        mean_act = float(tier_df["t_actual"].mean())
+        wmean = float((tier_df["t_residual"] * tier_df["weight"]).sum() / eff)
+        z = wmean / (0.5 / math.sqrt(eff))
+        style = "green" if z > 1.96 else "red" if z < -1.96 else ""
+
+        t.add_row(
+            label,
+            elo_range,
+            str(n),
+            f"{eff:.1f}",
+            f"{wins}/{draws}/{losses}",
+            f"{mean_exp:.1%}",
+            f"{mean_act:.1%}",
+            f"{wmean:+.3f}",
+            f"{z:+.2f}",
+            style=style,
+        )
+
+    for label, lo, hi in bands:
+        _add_tier_row(label, lo, hi, subset)
+
+    # Total row
+    n_total = len(subset)
+    eff_total = float(subset["weight"].sum())
+    w_total = int((subset["t_actual"] == 1.0).sum())
+    d_total = int((subset["t_actual"] == 0.5).sum())
+    l_total = int((subset["t_actual"] == 0.0).sum())
+    exp_total = float(subset["t_expected"].mean())
+    act_total = float(subset["t_actual"].mean())
+    wmean_total = float((subset["t_residual"] * subset["weight"]).sum() / eff_total)
+    z_total = wmean_total / (0.5 / math.sqrt(eff_total))
+    t.add_section()
+    t.add_row(
+        "Total",
+        "all",
+        str(n_total),
+        f"{eff_total:.1f}",
+        f"{w_total}/{d_total}/{l_total}",
+        f"{exp_total:.1%}",
+        f"{act_total:.1%}",
+        f"{wmean_total:+.3f}",
+        f"{z_total:+.2f}",
+    )
+
+    console.print(t)
+
+
 def cmd_pair(args: argparse.Namespace, records: pd.DataFrame, console: Console) -> None:
-    t1, t2 = args.team1, args.team2
+    if getattr(args, "game", None) is not None:
+        from wc2026.data.loader import load_schedule
+
+        schedule = load_schedule()
+        group_games = schedule[schedule["Round"] == "Group stage"].reset_index(drop=True)
+        if not 1 <= args.game <= len(group_games):
+            console.print(f"[red]--game must be between 1 and {len(group_games)}.[/red]")
+            return
+        row = group_games.iloc[args.game - 1]
+        t1, t2 = str(row["home_team"]), str(row["away_team"])
+        console.print(f"[dim]Game {args.game}: {t1} vs {t2}[/dim]\n")
+    elif args.team1 and args.team2:
+        t1, t2 = args.team1, args.team2
+    else:
+        console.print("[red]Specify either TEAM1 TEAM2 or --game N.[/red]")
+        return
 
     mask = ((records["home_team"] == t1) & (records["away_team"] == t2)) | (
         (records["home_team"] == t2) & (records["away_team"] == t1)
@@ -417,8 +545,27 @@ def main() -> None:
 
     # ── pair ──────────────────────────────────────────────────────────────────
     pp = sub.add_parser("pair", help="Per-match history and aggregate stats for two teams.")
-    pp.add_argument("team1", metavar="TEAM1")
-    pp.add_argument("team2", metavar="TEAM2")
+    pp.add_argument("team1", metavar="TEAM1", nargs="?", default=None)
+    pp.add_argument("team2", metavar="TEAM2", nargs="?", default=None)
+    pp.add_argument(
+        "--game",
+        type=int,
+        default=None,
+        metavar="N",
+        help="WC 2026 group-stage game number (1-based); overrides TEAM1/TEAM2.",
+    )
+
+    # ── profile ───────────────────────────────────────────────────────────────
+    prp = sub.add_parser("profile", help="Performance breakdown by opponent ELO tier.")
+    prp.add_argument("team", metavar="TEAM")
+    prp.add_argument(
+        "--thresholds",
+        nargs=3,
+        type=float,
+        default=[1500.0, 1650.0, 1800.0],
+        metavar="N",
+        help="Three ELO breakpoints defining Weak/Mid/Strong/Elite (default: 1500 1650 1800).",
+    )
 
     args = parser.parse_args()
 
@@ -438,8 +585,10 @@ def main() -> None:
 
     if args.command == "summary":
         cmd_summary(args, records, console)
-    else:
+    elif args.command == "pair":
         cmd_pair(args, records, console)
+    else:
+        cmd_profile(args, records, console)
 
 
 if __name__ == "__main__":
