@@ -46,3 +46,25 @@ def compute_recency_weights(dates: pd.Series, half_life_years: float = 3.0) -> n
     age_days = (latest - dates).dt.days.values.astype(float)
     half_life_days = half_life_years * 365.25
     return np.exp(-np.log(2) * age_days / half_life_days)
+
+
+MAJOR_TOURNAMENTS: frozenset[str] = frozenset(
+    {
+        "FIFA World Cup",
+        "UEFA Euro",
+        "Copa América",
+        "African Cup of Nations",
+        "AFC Asian Cup",
+        "Gold Cup",
+    }
+)
+
+
+def compute_tournament_weights(tournaments: pd.Series, major_multiplier: float = 2.5) -> np.ndarray:
+    """Multiplier per row: `major_multiplier` for matches in MAJOR_TOURNAMENTS, else 1.0.
+
+    Qualifiers are intentionally excluded — their home/away regime differs from the
+    neutral-venue tournament finals we care about predicting.
+    """
+    is_major = tournaments.isin(MAJOR_TOURNAMENTS).to_numpy()
+    return np.where(is_major, major_multiplier, 1.0)

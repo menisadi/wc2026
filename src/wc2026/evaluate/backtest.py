@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import poisson as scipy_poisson
 
-from wc2026.features.builder import TeamStrength
+from wc2026.features.builder import MAJOR_TOURNAMENTS, TeamStrength
 from wc2026.model.poisson import PoissonModel
 
 ELO_SCALE = 600.0
@@ -236,28 +236,34 @@ def walk_forward(
     since_year: int,
     half_life: float = 3.0,
     neutral_only: bool = False,
+    tournaments_only: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> BacktestResult:
     """Yearly walk-forward over `since_year..max(year)`.
 
     For each year Y in that range:
-      - fit every predictor on results with date.year < Y
-      - predict every match in year Y
+      - fit every predictor on results with date.year < Y (training set is NOT filtered
+        by neutral_only / tournaments_only — only the eval set is)
+      - predict every match in year Y (filtered)
       - accumulate one row per (predictor, match)
     """
     df = results.dropna(subset=["home_score", "away_score"]).copy()
     df["year"] = df["date"].dt.year
+    eval_df = df
     if neutral_only:
-        df = df[df["neutral"]].copy()
+        eval_df = eval_df[eval_df["neutral"]]
+    if tournaments_only:
+        eval_df = eval_df[eval_df["tournament"].isin(MAJOR_TOURNAMENTS)]
+    eval_df = eval_df.copy()
 
-    eval_years = sorted(int(y) for y in df["year"].unique() if y >= since_year)
+    eval_years = sorted(int(y) for y in eval_df["year"].unique() if y >= since_year)
     if not eval_years:
         raise ValueError(f"No matches found in/after {since_year}.")
 
     rows: list[dict[str, Any]] = []
     for y in eval_years:
         train = df[df["year"] < y].drop(columns="year")
-        test = df[df["year"] == y].drop(columns="year").reset_index(drop=True)
+        test = eval_df[eval_df["year"] == y].drop(columns="year").reset_index(drop=True)
         if train.empty or test.empty:
             continue
 

@@ -419,6 +419,11 @@ def backtest(
         "--neutral-only",
         help="Only evaluate on neutral-venue matches (matches the WC regime).",
     ),
+    tournaments_only: bool = typer.Option(
+        False,
+        "--tournaments-only",
+        help="Only evaluate on major-tournament finals (WC, Euro, Copa, AFCON, etc.).",
+    ),
     calibration: bool = typer.Option(
         False, "--calibration", help="Also print a calibration table for the main model."
     ),
@@ -457,6 +462,7 @@ def backtest(
         since_year=since,
         half_life=half_life,
         neutral_only=neutral_only,
+        tournaments_only=tournaments_only,
         progress=progress,
     )
 
@@ -485,6 +491,8 @@ def backtest(
     title = f"Backtest {since}–{int(results['date'].dt.year.max())}"
     if neutral_only:
         title += " (neutral only)"
+    if tournaments_only:
+        title += " (tournaments only)"
     table = Table(title=title, show_header=True)
     table.add_column("Predictor", style="bold")
     table.add_column("Log loss", justify="right")
