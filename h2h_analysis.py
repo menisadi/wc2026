@@ -517,30 +517,44 @@ def cmd_pair(args: argparse.Namespace, records: pd.DataFrame, console: Console) 
     )
     subset = records[mask].copy()
 
-    if subset.empty:
-        console.print(f"[red]No competitive matches found between {t1} and {t2}.[/red]")
-        known = sorted(set(records["home_team"]) | set(records["away_team"]))
-        close_t1 = [n for n in known if t1.lower() in n.lower()]
-        close_t2 = [n for n in known if t2.lower() in n.lower()]
-        if close_t1:
-            console.print(f"[dim]Did you mean (team 1): {', '.join(close_t1[:5])}?[/dim]")
-        if close_t2:
-            console.print(f"[dim]Did you mean (team 2): {', '.join(close_t2[:5])}?[/dim]")
+    known = sorted(set(records["home_team"]) | set(records["away_team"]))
+    t1_known = t1 in known
+    t2_known = t2 in known
+
+    if not t1_known or not t2_known:
+        # At least one name is unrecognised — suggest corrections and stop.
+        if not t1_known:
+            close = [n for n in known if t1.lower() in n.lower()]
+            console.print(f"[red]Unknown team:[/red] {t1}")
+            if close:
+                console.print(f"[dim]Did you mean: {', '.join(close[:5])}?[/dim]")
+        if not t2_known:
+            close = [n for n in known if t2.lower() in n.lower()]
+            console.print(f"[red]Unknown team:[/red] {t2}")
+            if close:
+                console.print(f"[dim]Did you mean: {', '.join(close[:5])}?[/dim]")
         return
 
-    t1_home = subset["home_team"] == t1
-    subset["t1_home"] = t1_home
-    subset["t1_goals"] = subset["home_score"].where(t1_home, subset["away_score"])
-    subset["t2_goals"] = subset["away_score"].where(t1_home, subset["home_score"])
-    subset["t1_elo"] = subset["elo_home"].where(t1_home, subset["elo_away"])
-    subset["t2_elo"] = subset["elo_away"].where(t1_home, subset["elo_home"])
-    subset["t1_expected"] = subset["home_expected"].where(t1_home, 1.0 - subset["home_expected"])
-    subset["t1_actual"] = subset["home_actual"].where(t1_home, 1.0 - subset["home_actual"])
-    subset["t1_residual"] = subset["residual"].where(t1_home, -subset["residual"])
+    if subset.empty:
+        console.print(f"[dim]No competitive matches on record between {t1} and {t2}.[/dim]\n")
 
-    console.print(_pair_summary_panel(subset, t1, t2))
-    console.print()
-    console.print(_pair_rich_table(subset, t1, t2))
+    if not subset.empty:
+        t1_home = subset["home_team"] == t1
+        subset["t1_home"] = t1_home
+        subset["t1_goals"] = subset["home_score"].where(t1_home, subset["away_score"])
+        subset["t2_goals"] = subset["away_score"].where(t1_home, subset["home_score"])
+        subset["t1_elo"] = subset["elo_home"].where(t1_home, subset["elo_away"])
+        subset["t2_elo"] = subset["elo_away"].where(t1_home, subset["elo_home"])
+        subset["t1_expected"] = subset["home_expected"].where(
+            t1_home, 1.0 - subset["home_expected"]
+        )
+        subset["t1_actual"] = subset["home_actual"].where(t1_home, 1.0 - subset["home_actual"])
+        subset["t1_residual"] = subset["residual"].where(t1_home, -subset["residual"])
+
+        console.print(_pair_summary_panel(subset, t1, t2))
+        console.print()
+        console.print(_pair_rich_table(subset, t1, t2))
+        console.print()
 
     # Profile context: show each team's historical stats at the tier this matchup falls into
     G1, G2 = 100.0, 250.0
