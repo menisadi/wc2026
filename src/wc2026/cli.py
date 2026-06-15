@@ -572,5 +572,132 @@ def refresh_data(
     console.print("\n[bold green]Done.[/bold green] Re-run any command to use updated data.")
 
 
+@app.command("snapshot")
+def snapshot(
+    simulations: int = typer.Option(10_000, "--sims", "-n", help="Number of Monte Carlo runs"),
+    seed: int | None = typer.Option(None, "--seed"),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
+    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
+) -> None:
+    """Append current win probabilities to data/probability_history.csv."""
+    import csv
+    from datetime import date
+    from pathlib import Path
+
+    from wc2026.data.loader import load_wc2026_results
+    from wc2026.simulate.tournament import run_monte_carlo
+
+    model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
+    actual = load_wc2026_results()
+
+    with _status(f"Running {simulations:,} simulations…", quiet):
+        sim = run_monte_carlo(groups, model, n=simulations, seed=seed, actual_results=actual)
+
+    ranked = sim.sorted_by_win_prob()
+    today = date.today().isoformat()
+    history_path = Path(__file__).parents[2] / "data" / "probability_history.csv"
+    write_header = not history_path.exists()
+
+    with history_path.open("a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["date", "team", "win_pct", "final_pct", "semi_pct"])
+        for team, p_win in ranked:
+            writer.writerow(
+                [
+                    today,
+                    team,
+                    f"{p_win:.4f}",
+                    f"{sim.final_prob(team):.4f}",
+                    f"{sim.sf_prob(team):.4f}",
+                ]
+            )
+
+    console.print(
+        f"[green]Snapshot saved:[/green] {len(ranked)} teams → [bold]{history_path}[/bold]"
+    )
+
+
+@app.command("show-history")
+def show_history(
+    team: str | None = typer.Option(None, "--team", "-t", help="Show all snapshots for one team"),
+    top: int = typer.Option(10, "--top", help="Show top N teams (by latest win %)"),
+) -> None:
+    """Show how win probabilities have changed across snapshots."""
+    from pathlib import Path
+
+    import pandas as pd
+
+    history_path = Path(__file__).parents[2] / "data" / "probability_history.csv"
+    if not history_path.exists():
+        console.print("[red]No snapshot history found. Run `wc2026 snapshot` first.[/red]")
+        raise typer.Exit(1)
+
+    df = pd.read_csv(history_path)
+    dates = sorted(df["date"].unique())
+
+    if team:
+        sub = df[df["team"].str.lower() == team.lower()].sort_values("date")
+        if sub.empty:
+            console.print(f"[red]Team not found in history:[/red] {team}")
+            raise typer.Exit(1)
+        table = Table(title=f"{sub.iloc[0]['team']} — win probability history", show_header=True)
+        table.add_column("Date")
+        table.add_column("Win %", justify="right", style="green")
+        table.add_column("Final %", justify="right")
+        table.add_column("Semi %", justify="right")
+        for _, row in sub.iterrows():
+            table.add_row(
+                str(row["date"]),
+                f"{row['win_pct']:.1%}",
+                f"{row['final_pct']:.1%}",
+                f"{row['semi_pct']:.1%}",
+            )
+        console.print(table)
+        return
+
+    latest_date = dates[-1]
+    prev_date = dates[-2] if len(dates) >= 2 else None
+    latest = df[df["date"] == latest_date].set_index("team")
+    prev = df[df["date"] == prev_date].set_index("team") if prev_date else None
+
+    top_teams = latest.nlargest(top, "win_pct")
+
+    title = f"Win probabilities — {latest_date}"
+    if prev_date:
+        title += f" (vs {prev_date})"
+    table = Table(title=title, show_header=True)
+    table.add_column("Rank", style="dim")
+    table.add_column("Team", style="bold")
+    table.add_column("Win %", justify="right", style="green")
+    if prev is not None:
+        table.add_column("Δ Win %", justify="right")
+    table.add_column("Final %", justify="right")
+    table.add_column("Semi %", justify="right")
+
+    for i, (t, row) in enumerate(top_teams.iterrows(), 1):
+        cells = [str(i), str(t), f"{row['win_pct']:.1%}"]
+        if prev is not None:
+            if t in prev.index:
+                d = row["win_pct"] - prev.loc[t, "win_pct"]
+                if d > 0:
+                    cells.append(f"[green]+{d:.1%}[/green]")
+                elif d < 0:
+                    cells.append(f"[red]{d:.1%}[/red]")
+                else:
+                    cells.append("—")
+            else:
+                cells.append("[dim]new[/dim]")
+        cells += [f"{row['final_pct']:.1%}", f"{row['semi_pct']:.1%}"]
+        table.add_row(*cells)
+
+    console.print(table)
+    if len(dates) == 1:
+        console.print(
+            f"[dim]Only one snapshot so far ({dates[0]}). "
+            "Run again after more results to see changes.[/dim]"
+        )
+
+
 if __name__ == "__main__":
     app()

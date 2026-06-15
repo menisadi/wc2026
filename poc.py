@@ -190,13 +190,19 @@ class PoissonModel:
             return self._atk[team], self._def[team]
         if self._has_elo:
             return 0.0, 0.0
-        elo = cast(float, self._elo.loc[team, "rating"]) if team in self._elo.index else self._elo_mean
+        elo = (
+            cast(float, self._elo.loc[team, "rating"])
+            if team in self._elo.index
+            else self._elo_mean
+        )
         adj = 0.15 * (elo - self._elo_mean) / self._elo_std
         return adj, -adj
 
     def _elo_z(self, team: str) -> float:
         elo = (
-            cast(float, self._elo.loc[team, "rating"]) if team in self._elo.index else self._elo_train_mu
+            cast(float, self._elo.loc[team, "rating"])
+            if team in self._elo.index
+            else self._elo_train_mu
         )
         return (elo - self._elo_train_mu) / self._elo_train_sd
 
