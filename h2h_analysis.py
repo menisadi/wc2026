@@ -364,32 +364,12 @@ def _win_prob(elo_gap: float) -> float:
     return 1.0 / (1.0 + 10.0 ** (-elo_gap / 400.0))
 
 
-def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Console) -> None:
-    team = args.team
-    metric: str = args.metric
-    g1, g2 = sorted(args.gaps)  # e.g. 100, 250
-
-    # 5 symmetric tiers from dominant favourite to heavy underdog
-    # Each band: (label, win_exp_label, gap_lo_inclusive, gap_hi_exclusive)
-    bands: list[tuple[str, str, float | None, float | None]] = [
-        ("Dominant", f">{_win_prob(g2):.0%}", g2, None),
-        ("Favored", f"{_win_prob(g1):.0%}–{_win_prob(g2):.0%}", g1, g2),
-        ("Even", f"{_win_prob(-g1):.0%}–{_win_prob(g1):.0%}", -g1, g1),
-        ("Underdog", f"{_win_prob(-g2):.0%}–{_win_prob(-g1):.0%}", -g2, -g1),
-        ("Heavy und.", f"<{_win_prob(-g2):.0%}", None, -g2),
-    ]
-
+def _team_perspective(team: str, records: pd.DataFrame) -> pd.DataFrame:
+    """Filter records to matches involving team; add team-perspective columns."""
     mask = (records["home_team"] == team) | (records["away_team"] == team)
     subset = records[mask].copy()
-
     if subset.empty:
-        console.print(f"[red]No matches found for '{team}'.[/red]")
-        known = sorted(set(records["home_team"]) | set(records["away_team"]))
-        close = [n for n in known if team.lower() in n.lower()]
-        if close:
-            console.print(f"[dim]Did you mean: {', '.join(close[:5])}?[/dim]")
-        return
-
+        return subset
     t_home = subset["home_team"] == team
     subset["t_elo"] = subset["elo_home"].where(t_home, subset["elo_away"])
     subset["opp_elo"] = subset["elo_away"].where(t_home, subset["elo_home"])
@@ -399,32 +379,72 @@ def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Consol
     subset["t_residual"] = subset["residual"].where(t_home, -subset["residual"])
     subset["t_gf"] = subset["home_score"].where(t_home, subset["away_score"])
     subset["t_ga"] = subset["away_score"].where(t_home, subset["home_score"])
+    return subset
 
-    def _band_mask(df: pd.DataFrame, lo: float | None, hi: float | None) -> pd.Series:
-        if lo is None and hi is not None:
-            return df["elo_gap"] < hi
-        if hi is None and lo is not None:
-            return df["elo_gap"] >= lo
-        assert lo is not None and hi is not None
-        return (df["elo_gap"] >= lo) & (df["elo_gap"] < hi)
 
-    def _stats(df: pd.DataFrame) -> dict:
-        eff = float(df["weight"].sum())
-        wmean = float((df["t_residual"] * df["weight"]).sum() / eff)
-        return {
-            "n": len(df),
-            "eff": eff,
-            "wins": int((df["t_actual"] == 1.0).sum()),
-            "draws": int((df["t_actual"] == 0.5).sum()),
-            "losses": int((df["t_actual"] == 0.0).sum()),
-            "mean_exp": float(df["t_expected"].mean()),
-            "mean_act": float(df["t_actual"].mean()),
-            "wmean": wmean,
-            "z": wmean / (0.5 / math.sqrt(eff)),
-            "avg_gf": float(df["t_gf"].mean()),
-            "avg_ga": float(df["t_ga"].mean()),
-            "avg_gd": float((df["t_gf"] - df["t_ga"]).mean()),
-        }
+def _apply_band_mask(df: pd.DataFrame, lo: float | None, hi: float | None) -> pd.DataFrame:
+    if lo is None and hi is not None:
+        return df[df["elo_gap"] < hi]
+    if hi is None and lo is not None:
+        return df[df["elo_gap"] >= lo]
+    assert lo is not None and hi is not None
+    return df[(df["elo_gap"] >= lo) & (df["elo_gap"] < hi)]
+
+
+def _compute_stats(df: pd.DataFrame) -> dict:
+    eff = float(df["weight"].sum())
+    wmean = float((df["t_residual"] * df["weight"]).sum() / eff)
+    return {
+        "n": len(df),
+        "eff": eff,
+        "wins": int((df["t_actual"] == 1.0).sum()),
+        "draws": int((df["t_actual"] == 0.5).sum()),
+        "losses": int((df["t_actual"] == 0.0).sum()),
+        "mean_exp": float(df["t_expected"].mean()),
+        "mean_act": float(df["t_actual"].mean()),
+        "wmean": wmean,
+        "z": wmean / (0.5 / math.sqrt(eff)),
+        "avg_gf": float(df["t_gf"].mean()),
+        "avg_ga": float(df["t_ga"].mean()),
+        "avg_gd": float((df["t_gf"] - df["t_ga"]).mean()),
+    }
+
+
+def _gap_band(gap: float, g1: float, g2: float) -> tuple[str, str, float | None, float | None]:
+    """Return (tier_label, win_exp_str, lo, hi) for the band containing gap."""
+    if gap >= g2:
+        return "Dominant", f">{_win_prob(g2):.0%}", g2, None
+    if gap >= g1:
+        return "Favored", f"{_win_prob(g1):.0%}–{_win_prob(g2):.0%}", g1, g2
+    if gap >= -g1:
+        return "Even", f"{_win_prob(-g1):.0%}–{_win_prob(g1):.0%}", -g1, g1
+    if gap >= -g2:
+        return "Underdog", f"{_win_prob(-g2):.0%}–{_win_prob(-g1):.0%}", -g2, -g1
+    return "Heavy und.", f"<{_win_prob(-g2):.0%}", None, -g2
+
+
+def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Console) -> None:
+    team = args.team
+    metric: str = args.metric
+    g1, g2 = sorted(args.gaps)
+
+    bands: list[tuple[str, str, float | None, float | None]] = [
+        ("Dominant", f">{_win_prob(g2):.0%}", g2, None),
+        ("Favored", f"{_win_prob(g1):.0%}–{_win_prob(g2):.0%}", g1, g2),
+        ("Even", f"{_win_prob(-g1):.0%}–{_win_prob(g1):.0%}", -g1, g1),
+        ("Underdog", f"{_win_prob(-g2):.0%}–{_win_prob(-g1):.0%}", -g2, -g1),
+        ("Heavy und.", f"<{_win_prob(-g2):.0%}", None, -g2),
+    ]
+
+    subset = _team_perspective(team, records)
+
+    if subset.empty:
+        console.print(f"[red]No matches found for '{team}'.[/red]")
+        known = sorted(set(records["home_team"]) | set(records["away_team"]))
+        close = [n for n in known if team.lower() in n.lower()]
+        if close:
+            console.print(f"[dim]Did you mean: {', '.join(close[:5])}?[/dim]")
+        return
 
     def _cells(label: str, win_exp: str, s: dict) -> tuple[list[str], str]:
         style = "green" if s["z"] > 1.96 else "red" if s["z"] < -1.96 else ""
@@ -461,14 +481,14 @@ def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Consol
         t.add_column("Avg GD", justify="right")
 
     for label, win_exp, lo, hi in bands:
-        tier_df = subset[_band_mask(subset, lo, hi)]
+        tier_df = _apply_band_mask(subset, lo, hi)
         if len(tier_df) == 0:
             continue
-        cells, style = _cells(label, win_exp, _stats(tier_df))
+        cells, style = _cells(label, win_exp, _compute_stats(tier_df))
         t.add_row(*cells, style=style)
 
     t.add_section()
-    total_cells, _ = _cells("Total", "all", _stats(subset))
+    total_cells, _ = _cells("Total", "all", _compute_stats(subset))
     t.add_row(*total_cells)
 
     console.print(t)
@@ -521,6 +541,67 @@ def cmd_pair(args: argparse.Namespace, records: pd.DataFrame, console: Console) 
     console.print(_pair_summary_panel(subset, t1, t2))
     console.print()
     console.print(_pair_rich_table(subset, t1, t2))
+
+    # Profile context: show each team's historical stats at the tier this matchup falls into
+    G1, G2 = 100.0, 250.0
+
+    def _latest_elo(team: str) -> float:
+        m = (records["home_team"] == team) | (records["away_team"] == team)
+        recent = records[m].sort_values("date")
+        if recent.empty:
+            return DEFAULT_RATING
+        last = recent.iloc[-1]
+        return float(last["elo_home"] if last["home_team"] == team else last["elo_away"])
+
+    elo1, elo2 = _latest_elo(t1), _latest_elo(t2)
+    gap = elo1 - elo2
+
+    sub1 = _team_perspective(t1, records)
+    sub2 = _team_perspective(t2, records)
+
+    label1, wexp1, lo1, hi1 = _gap_band(gap, G1, G2)
+    label2, wexp2, lo2, hi2 = _gap_band(-gap, G1, G2)
+
+    tier1 = _apply_band_mask(sub1, lo1, hi1)
+    tier2 = _apply_band_mask(sub2, lo2, hi2)
+
+    ctx = Table(
+        title=(
+            f"Profile context  ·  current ELO gap {gap:+.0f}"
+            f"  ({t1} {elo1:.0f}  vs  {t2} {elo2:.0f})"
+        ),
+        box=box.SIMPLE,
+    )
+    ctx.add_column("Team", style="cyan")
+    ctx.add_column("Tier")
+    ctx.add_column("Win exp.", justify="right")
+    ctx.add_column("Games", justify="right")
+    ctx.add_column("Eff. games", justify="right")
+    ctx.add_column("Avg GF", justify="right")
+    ctx.add_column("Avg GA", justify="right")
+    ctx.add_column("Avg GD", justify="right")
+
+    for team_name, tier_df, tier_label, win_exp in (
+        (t1, tier1, label1, wexp1),
+        (t2, tier2, label2, wexp2),
+    ):
+        if len(tier_df) == 0:
+            ctx.add_row(team_name, tier_label, win_exp, "—", "—", "—", "—", "—")
+            continue
+        s = _compute_stats(tier_df)
+        ctx.add_row(
+            team_name,
+            tier_label,
+            win_exp,
+            str(s["n"]),
+            f"{s['eff']:.1f}",
+            f"{s['avg_gf']:.2f}",
+            f"{s['avg_ga']:.2f}",
+            f"{s['avg_gd']:+.2f}",
+        )
+
+    console.print()
+    console.print(ctx)
 
 
 def main() -> None:
