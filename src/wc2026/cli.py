@@ -618,6 +618,89 @@ def snapshot(
     )
 
 
+@app.command("backfill-snapshots")
+def backfill_snapshots(
+    simulations: int = typer.Option(10_000, "--sims", "-n", help="Number of Monte Carlo runs"),
+    seed: int | None = typer.Option(None, "--seed"),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
+    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
+) -> None:
+    """Create retroactive snapshots for each past WC 2026 match day."""
+    import csv
+    from pathlib import Path
+
+    import pandas as pd
+
+    from wc2026.data.loader import DATA_DIR
+    from wc2026.simulate.tournament import run_monte_carlo
+
+    model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
+
+    raw = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
+    wc = raw[
+        (raw["tournament"] == "FIFA World Cup")
+        & (raw["date"].dt.year == 2026)
+        & raw["home_score"].notna()
+        & raw["away_score"].notna()
+    ].copy()
+
+    if wc.empty:
+        console.print("[yellow]No WC 2026 results found in results.csv.[/yellow]")
+        raise typer.Exit(0)
+
+    match_days = sorted(wc["date"].dt.date.unique())
+
+    history_path = Path(__file__).parents[2] / "data" / "probability_history.csv"
+    existing_dates: set[str] = set()
+    if history_path.exists():
+        existing_dates = set(pd.read_csv(history_path)["date"].unique())
+
+    write_header = not history_path.exists()
+    skipped = 0
+
+    with history_path.open("a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["date", "team", "win_pct", "final_pct", "semi_pct"])
+
+        for day in match_days:
+            date_str = day.isoformat()
+            if date_str in existing_dates:
+                skipped += 1
+                continue
+
+            subset = wc[wc["date"].dt.date <= day]
+            actual: dict[tuple[str, str], tuple[int, int]] = {}
+            for _, row in subset.iterrows():
+                h, a = str(row["home_team"]), str(row["away_team"])
+                hs, as_ = int(row["home_score"]), int(row["away_score"])
+                actual[(h, a)] = (hs, as_)
+                actual[(a, h)] = (as_, hs)
+
+            with _status(f"Simulating as of {date_str} ({len(subset)} results)…", quiet):
+                sim = run_monte_carlo(
+                    groups, model, n=simulations, seed=seed, actual_results=actual
+                )
+
+            ranked = sim.sorted_by_win_prob()
+            for team, p_win in ranked:
+                writer.writerow(
+                    [
+                        date_str,
+                        team,
+                        f"{p_win:.4f}",
+                        f"{sim.final_prob(team):.4f}",
+                        f"{sim.sf_prob(team):.4f}",
+                    ]
+                )
+
+            if not quiet:
+                console.print(f"  [green]✓[/green] {date_str} ({len(subset)} result(s) locked in)")
+
+    total = len(match_days) - skipped
+    console.print(f"\n[green]Done.[/green] {total} new snapshot(s) added ({skipped} skipped).")
+
+
 @app.command("show-history")
 def show_history(
     team: str | None = typer.Option(None, "--team", "-t", help="Show all snapshots for one team"),
