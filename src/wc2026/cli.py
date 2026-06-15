@@ -625,12 +625,18 @@ def snapshot(
     ranked = sim.sorted_by_win_prob()
     today = date.today().isoformat()
     history_path = Path(__file__).parents[2] / "data" / "probability_history.csv"
-    write_header = not history_path.exists()
 
-    with history_path.open("a", newline="") as f:
+    existing_rows: list[list[str]] = []
+    if history_path.exists():
+        with history_path.open(newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)  # skip header
+            existing_rows = [row for row in reader if row and row[0] != today]
+
+    with history_path.open("w", newline="") as f:
         writer = csv.writer(f)
-        if write_header:
-            writer.writerow(["date", "team", "win_pct", "final_pct", "semi_pct"])
+        writer.writerow(["date", "team", "win_pct", "final_pct", "semi_pct"])
+        writer.writerows(existing_rows)
         for team, p_win in ranked:
             writer.writerow(
                 [
