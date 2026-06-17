@@ -355,12 +355,6 @@ def main() -> None:
     _ = parser.add_argument("--quiet", action="store_true", help="suppress progress messages")
     _ = parser.add_argument("--seed", type=int, default=None, help="RNG seed for reproducibility")
     _ = parser.add_argument(
-        "--no-actuals",
-        action="store_true",
-        dest="no_actuals",
-        help="ignore already-played WC 2026 results and simulate everything from scratch",
-    )
-    _ = parser.add_argument(
         "--half-life",
         type=float,
         default=3.0,
@@ -373,7 +367,7 @@ def main() -> None:
         print("Loading data…")
     results, schedule, elo, elo_history = load_data()
     groups = extract_groups(schedule)
-    actual = None if args.no_actuals else load_wc2026_results()
+    actual = load_wc2026_results()
 
     wc_teams = [t for teams in groups.values() for t in teams]
     elo_wc = elo[elo.index.isin(wc_teams)]
