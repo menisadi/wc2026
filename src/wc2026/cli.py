@@ -683,7 +683,7 @@ def backfill_snapshots(
 
     import pandas as pd
 
-    from wc2026.data.loader import DATA_DIR
+    from wc2026.data.loader import DATA_DIR, RESULTS_TO_CANONICAL
     from wc2026.simulate.tournament import run_monte_carlo
 
     model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
@@ -724,7 +724,8 @@ def backfill_snapshots(
             subset = wc[wc["date"].dt.date <= day]
             actual: dict[tuple[str, str], tuple[int, int]] = {}
             for _, row in subset.iterrows():
-                h, a = str(row["home_team"]), str(row["away_team"])
+                h = RESULTS_TO_CANONICAL.get(str(row["home_team"]), str(row["home_team"]))
+                a = RESULTS_TO_CANONICAL.get(str(row["away_team"]), str(row["away_team"]))
                 hs, as_ = int(row["home_score"]), int(row["away_score"])
                 actual[(h, a)] = (hs, as_)
                 actual[(a, h)] = (as_, hs)

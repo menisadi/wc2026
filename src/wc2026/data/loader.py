@@ -24,6 +24,11 @@ RANKINGS_TO_CANONICAL: dict[str, str] = {
 # Map names used in ELO CSV → canonical (ELO already uses results.csv style mostly)
 ELO_TO_CANONICAL: dict[str, str] = {}
 
+# Normalize team names within results.csv itself (e.g. scraped names vs. canonical)
+RESULTS_TO_CANONICAL: dict[str, str] = {
+    "Cape Verde Islands": "Cape Verde",
+}
+
 
 def _normalize(name: str, mapping: dict[str, str]) -> str:
     return mapping.get(name, name)
@@ -82,7 +87,8 @@ def load_wc2026_results() -> dict[tuple[str, str], tuple[int, int]]:
     ]
     out: dict[tuple[str, str], tuple[int, int]] = {}
     for _, row in wc.iterrows():
-        h, a = row["home_team"], row["away_team"]
+        h = _normalize(row["home_team"], RESULTS_TO_CANONICAL)
+        a = _normalize(row["away_team"], RESULTS_TO_CANONICAL)
         hs, as_ = int(row["home_score"]), int(row["away_score"])
         out[(h, a)] = (hs, as_)
         out[(a, h)] = (as_, hs)

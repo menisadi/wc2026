@@ -25,6 +25,11 @@ SCHEDULE_NORM: dict[str, str] = {
     "Türkiye": "Turkey",
 }
 
+# Normalize team names within results.csv itself
+RESULTS_NORM: dict[str, str] = {
+    "Cape Verde Islands": "Cape Verde",
+}
+
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -62,7 +67,8 @@ def load_wc2026_results() -> dict[tuple[str, str], tuple[int, int]]:
     ]
     out: dict[tuple[str, str], tuple[int, int]] = {}
     for _, row in wc.iterrows():
-        h, a = str(row["home_team"]), str(row["away_team"])
+        h = RESULTS_NORM.get(str(row["home_team"]), str(row["home_team"]))
+        a = RESULTS_NORM.get(str(row["away_team"]), str(row["away_team"]))
         hs, as_ = int(row["home_score"]), int(row["away_score"])
         out[(h, a)] = (hs, as_)
         out[(a, h)] = (as_, hs)
