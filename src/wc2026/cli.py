@@ -607,6 +607,9 @@ def snapshot(
     seed: int | None = typer.Option(None, "--seed"),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
+    skip_refresh: bool = typer.Option(
+        False, "--skip-refresh", help="Skip live result fetch (use cached data as-is)."
+    ),
 ) -> None:
     """Append current win probabilities to data/probability_history.csv."""
     import csv
@@ -615,6 +618,20 @@ def snapshot(
 
     from wc2026.data.loader import load_wc2026_results
     from wc2026.simulate.tournament import run_monte_carlo
+
+    if not skip_refresh:
+        from wc2026.data.elo import load_or_compute_elo_history
+        from wc2026.data.live import patch_results_csv
+
+        with _status("Fetching live results…", quiet):
+            try:
+                n_updated = patch_results_csv()
+                if not quiet:
+                    err_console.log(f"Live refresh: {n_updated} result(s) updated")
+            except RuntimeError as e:
+                err_console.print(f"[yellow]Live refresh skipped:[/yellow] {e}")
+        with _status("Recomputing ELO…", quiet):
+            _ = load_or_compute_elo_history(force_refresh=True)
 
     model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
     actual = load_wc2026_results()
