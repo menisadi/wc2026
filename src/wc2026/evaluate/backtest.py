@@ -225,6 +225,45 @@ class EloOnlyPredictor:
         return np.floor(self.predict_xg(matches)).astype(int)
 
 
+class RandomPoissonPredictor:
+    """Symmetric Poisson(λ) baseline: both teams score at the training mean."""
+
+    name = "random-poisson"
+
+    def __init__(self) -> None:
+        self._lam: float = 1.3
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        scored = training.dropna(subset=["home_score", "away_score"])
+        if not scored.empty:
+            all_goals = np.concatenate(
+                [scored["home_score"].to_numpy(), scored["away_score"].to_numpy()]
+            )
+            self._lam = float(np.mean(all_goals))
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        ph, pd_, pa = _wdl_from_xg(self._lam, self._lam)
+        return np.tile([ph, pd_, pa], (len(matches), 1))
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.full((len(matches), 2), self._lam)
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray:
+        x = matches["home_score"].to_numpy().astype(int)
+        y = matches["away_score"].to_numpy().astype(int)
+        return scipy_poisson.logpmf(x, self._lam) + scipy_poisson.logpmf(y, self._lam)
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        modal = int(self._lam)
+        return np.full((len(matches), 2), modal, dtype=int)
+
+
 class PoissonPredictor:
     """Wraps PoissonModel. `use_elo` toggles the ELO feature inside the regression."""
 
@@ -490,6 +529,7 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "uniform": UniformPredictor(),
         "home-win": HomeWinPredictor(),
         "elo-only": EloOnlyPredictor(),
+        "random-poisson": RandomPoissonPredictor(),
         "poisson": PoissonPredictor(use_elo=False),
         "poisson+elo": PoissonPredictor(use_elo=True),
         "dc+elo": DixonColesPredictor(),

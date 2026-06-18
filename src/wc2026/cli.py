@@ -445,9 +445,12 @@ def backtest(
     since: int = typer.Option(2024, "--since", help="First year to evaluate (inclusive)."),
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years."),
     baselines: str = typer.Option(
-        "uniform,home-win,elo-only",
+        "uniform,home-win,elo-only,random-poisson",
         "--baselines",
-        help="Comma-separated baselines to compare against (uniform, home-win, elo-only).",
+        help=(
+            "Comma-separated baselines to compare against"
+            " (uniform, home-win, elo-only, random-poisson)."
+        ),
     ),
     neutral_only: bool = typer.Option(
         False,
