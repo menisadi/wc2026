@@ -15,6 +15,7 @@ Conventions
 from __future__ import annotations
 
 import numpy as np
+from scipy.stats import poisson as scipy_poisson
 
 EPS = 1e-15
 
@@ -67,6 +68,45 @@ def accuracy(probs: np.ndarray, outcomes: np.ndarray) -> float:
     """Fraction of matches whose argmax-prob outcome matches the truth."""
     probs, outcomes = _as_arrays(probs, outcomes)
     return float((probs.argmax(axis=1) == outcomes).mean())
+
+
+def joint_poisson_loglik(
+    xg_home: np.ndarray,
+    xg_away: np.ndarray,
+    actual_home: np.ndarray,
+    actual_away: np.ndarray,
+) -> float:
+    """Mean negative joint Poisson log-likelihood of actual scores. Lower is better."""
+    ll = scipy_poisson.logpmf(actual_home, np.clip(xg_home, EPS, None)) + scipy_poisson.logpmf(
+        actual_away, np.clip(xg_away, EPS, None)
+    )
+    return float(-ll.mean())
+
+
+def goals_mae(
+    xg_home: np.ndarray,
+    xg_away: np.ndarray,
+    actual_home: np.ndarray,
+    actual_away: np.ndarray,
+) -> tuple[float, float]:
+    """Mean absolute error on home and away goals separately."""
+    return float(np.abs(xg_home - actual_home).mean()), float(np.abs(xg_away - actual_away).mean())
+
+
+def modal_accuracy(
+    xg_home: np.ndarray,
+    xg_away: np.ndarray,
+    actual_home: np.ndarray,
+    actual_away: np.ndarray,
+) -> float:
+    """Fraction of matches where the modal predicted score equals the actual score.
+
+    The mode of Poisson(λ) is floor(λ), so the modal joint score is
+    (floor(λ_h), floor(λ_a)) for independent home/away goals.
+    """
+    modal_h = np.floor(xg_home).astype(int)
+    modal_a = np.floor(xg_away).astype(int)
+    return float(((modal_h == actual_home) & (modal_a == actual_away)).mean())
 
 
 def calibration_buckets(

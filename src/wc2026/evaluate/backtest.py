@@ -68,6 +68,8 @@ class Predictor(Protocol):
 
     def predict_proba(self, matches: pd.DataFrame) -> np.ndarray: ...
 
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None: ...
+
 
 class UniformPredictor:
     name = "uniform"
@@ -84,6 +86,9 @@ class UniformPredictor:
     def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
         n = len(matches)
         return np.full((n, 3), 1.0 / 3.0)
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
 
 
 class HomeWinPredictor:
@@ -124,6 +129,9 @@ class HomeWinPredictor:
         probs[~neutral] = self._home_freq
         return probs
 
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
 
 class EloOnlyPredictor:
     """ELO-only Poisson model: xG = BASE_XG * exp(±diff / ELO_SCALE)."""
@@ -160,6 +168,14 @@ class EloOnlyPredictor:
             factor = float(np.exp(diff / ELO_SCALE))
             xg_h, xg_a = BASE_XG * factor, BASE_XG / factor
             out[i] = _wdl_from_xg(xg_h, xg_a)
+        return out
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray:
+        out = np.empty((len(matches), 2))
+        for i, (_, m) in enumerate(matches.iterrows()):
+            diff = self._rating(m["home_team"]) - self._rating(m["away_team"])
+            factor = float(np.exp(diff / ELO_SCALE))
+            out[i] = [BASE_XG * factor, BASE_XG / factor]
         return out
 
 
@@ -213,6 +229,15 @@ class PoissonPredictor:
                 m["home_team"], m["away_team"], home_adv=home_adv
             )
             out[i] = [p_h, p_d, p_a]
+        return out
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray:
+        assert self._model is not None
+        out = np.empty((len(matches), 2))
+        for i, (_, m) in enumerate(matches.iterrows()):
+            home_adv = 0.0 if bool(m["neutral"]) else 1.0
+            xg_h, xg_a = self._model.predict_xg(m["home_team"], m["away_team"], home_adv=home_adv)
+            out[i] = [xg_h, xg_a]
         return out
 
 
@@ -279,6 +304,7 @@ def walk_forward(
                 progress(f"{p.name}: fit < {y}, predict {y} ({len(test)} matches)")
             p.fit(train, elo_history, half_life, y)
             probs = p.predict_proba(test)
+            xgs = p.predict_xg(test)
 
             for i, (_, m) in enumerate(test.iterrows()):
                 rows.append(
@@ -295,6 +321,8 @@ def walk_forward(
                         "outcome": int(outcomes[i]),
                         "home_goals": int(m["home_score"]),
                         "away_goals": int(m["away_score"]),
+                        "xg_home": float(xgs[i, 0]) if xgs is not None else float("nan"),
+                        "xg_away": float(xgs[i, 1]) if xgs is not None else float("nan"),
                     }
                 )
 

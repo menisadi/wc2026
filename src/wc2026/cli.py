@@ -462,6 +462,9 @@ def backtest(
     calibration: bool = typer.Option(
         False, "--calibration", help="Also print a calibration table for the main model."
     ),
+    score_metrics: bool = typer.Option(
+        False, "--score-metrics", help="Also print score-prediction metrics (xG-based)."
+    ),
     csv: bool = typer.Option(False, "--csv", help="Output metrics as CSV."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress messages."),
 ) -> None:
@@ -473,7 +476,10 @@ def backtest(
         accuracy,
         brier_score,
         calibration_buckets,
+        goals_mae,
+        joint_poisson_loglik,
         log_loss,
+        modal_accuracy,
         rps,
     )
 
@@ -558,6 +564,45 @@ def backtest(
                 str(int(b["n"])),
             )
         console.print(cal_table)
+
+    if score_metrics:
+        score_rows = []
+        for name in bt.predictor_names:
+            sub = bt.for_predictor(name)
+            if sub["xg_home"].isna().all():
+                continue
+            sub = sub.dropna(subset=["xg_home", "xg_away"])
+            xg_h = sub["xg_home"].to_numpy()
+            xg_a = sub["xg_away"].to_numpy()
+            act_h = sub["home_goals"].to_numpy()
+            act_a = sub["away_goals"].to_numpy()
+            mae_h, mae_a = goals_mae(xg_h, xg_a, act_h, act_a)
+            score_rows.append(
+                (
+                    name,
+                    joint_poisson_loglik(xg_h, xg_a, act_h, act_a),
+                    mae_h,
+                    mae_a,
+                    modal_accuracy(xg_h, xg_a, act_h, act_a),
+                    len(sub),
+                )
+            )
+
+        score_table = Table(title="Score prediction metrics", show_header=True)
+        score_table.add_column("Predictor", style="bold")
+        score_table.add_column("Joint log-loss", justify="right")
+        score_table.add_column("MAE home", justify="right")
+        score_table.add_column("MAE away", justify="right")
+        score_table.add_column("Modal accuracy", justify="right", style="green")
+        score_table.add_column("N", justify="right", style="dim")
+        for name, jll, mh, ma, modal, n in score_rows:
+            score_table.add_row(
+                name, f"{jll:.4f}", f"{mh:.3f}", f"{ma:.3f}", f"{modal:.1%}", str(n)
+            )
+        console.print(score_table)
+        console.print(
+            "[dim]Joint log-loss / MAE = lower is better; modal accuracy = higher is better.[/dim]"
+        )
         console.print("[dim]Well-calibrated → mean pred ≈ mean obs in every bucket.[/dim]")
 
 
