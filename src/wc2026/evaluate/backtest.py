@@ -29,6 +29,7 @@ from wc2026.model.poisson import PoissonModel
 
 ELO_SCALE = 600.0
 BASE_XG = 1.3
+DC_MAX_GOALS = 8
 
 
 def outcome_from_score(home_goals: int, away_goals: int) -> int:
@@ -37,6 +38,22 @@ def outcome_from_score(home_goals: int, away_goals: int) -> int:
     if home_goals == away_goals:
         return 1
     return 2
+
+
+def _dc_tau_vec(
+    x: np.ndarray,
+    y: np.ndarray,
+    lam: np.ndarray,
+    mu: np.ndarray,
+    rho: float,
+) -> np.ndarray:
+    """Vectorized Dixon-Coles τ correction for low-scoring outcomes."""
+    tau = np.ones(len(x))
+    tau[(x == 0) & (y == 0)] = 1.0 - lam[(x == 0) & (y == 0)] * mu[(x == 0) & (y == 0)] * rho
+    tau[(x == 1) & (y == 0)] = 1.0 + mu[(x == 1) & (y == 0)] * rho
+    tau[(x == 0) & (y == 1)] = 1.0 + lam[(x == 0) & (y == 1)] * rho
+    tau[(x == 1) & (y == 1)] = 1.0 - rho
+    return tau
 
 
 def _wdl_from_xg(xg_h: float, xg_a: float, max_goals: int = 10) -> tuple[float, float, float]:
@@ -70,6 +87,14 @@ class Predictor(Protocol):
 
     def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None: ...
 
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        """Per-match log P(actual_home_goals, actual_away_goals). None if unsupported."""
+        ...
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray | None:
+        """Per-match modal score as (n, 2) int array [modal_h, modal_a]. None if unsupported."""
+        ...
+
 
 class UniformPredictor:
     name = "uniform"
@@ -88,6 +113,12 @@ class UniformPredictor:
         return np.full((n, 3), 1.0 / 3.0)
 
     def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray | None:
         return None
 
 
@@ -130,6 +161,12 @@ class HomeWinPredictor:
         return probs
 
     def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray | None:
         return None
 
 
@@ -177,6 +214,15 @@ class EloOnlyPredictor:
             factor = float(np.exp(diff / ELO_SCALE))
             out[i] = [BASE_XG * factor, BASE_XG / factor]
         return out
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self.predict_xg(matches)
+        x = matches["home_score"].to_numpy().astype(int)
+        y = matches["away_score"].to_numpy().astype(int)
+        return scipy_poisson.logpmf(x, xgs[:, 0]) + scipy_poisson.logpmf(y, xgs[:, 1])
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.floor(self.predict_xg(matches)).astype(int)
 
 
 class PoissonPredictor:
@@ -239,6 +285,110 @@ class PoissonPredictor:
             xg_h, xg_a = self._model.predict_xg(m["home_team"], m["away_team"], home_adv=home_adv)
             out[i] = [xg_h, xg_a]
         return out
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self.predict_xg(matches)
+        x = matches["home_score"].to_numpy().astype(int)
+        y = matches["away_score"].to_numpy().astype(int)
+        return scipy_poisson.logpmf(x, xgs[:, 0]) + scipy_poisson.logpmf(y, xgs[:, 1])
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.floor(self.predict_xg(matches)).astype(int)
+
+
+class DixonColesPredictor:
+    """Poisson+ELO model with Dixon-Coles correction on low-scoring outcomes.
+
+    Fits ρ (the correlation parameter) by maximum likelihood on training scores,
+    then applies τ(x, y, λ, μ, ρ) to the four low-scoring joint outcomes.
+    """
+
+    name = "dc+elo"
+
+    def __init__(self) -> None:
+        self._base = PoissonPredictor(use_elo=True)
+        self._rho: float = 0.0
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        from scipy.optimize import minimize_scalar
+
+        self._base.fit(training, elo_history, half_life, year_cutoff)
+        scored = training.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
+        if scored.empty or self._base._model is None:
+            self._rho = 0.0
+            return
+
+        xgs = self._base.predict_xg(scored)
+        lam, mu = xgs[:, 0], xgs[:, 1]
+        x = scored["home_score"].to_numpy().astype(int)
+        y = scored["away_score"].to_numpy().astype(int)
+        base_ll = scipy_poisson.logpmf(x, lam) + scipy_poisson.logpmf(y, mu)
+
+        def neg_ll(rho: float) -> float:
+            tau = _dc_tau_vec(x, y, lam, mu, rho)
+            if (tau <= 0).any():
+                return 1e10
+            return float(-(np.log(tau) + base_ll).sum())
+
+        result = minimize_scalar(neg_ll, bounds=(-0.5, 0.2), method="bounded")
+        self._rho = float(result.x)
+
+    def _joint_probs(self, lam: np.ndarray, mu: np.ndarray) -> np.ndarray:
+        """Return DC-corrected joint distribution, shape (n, G+1, G+1)."""
+        G = DC_MAX_GOALS
+        goals = np.arange(G + 1)
+        p_x = scipy_poisson.pmf(goals[None, :], lam[:, None])  # (n, G+1)
+        p_y = scipy_poisson.pmf(goals[None, :], mu[:, None])  # (n, G+1)
+        joint = p_x[:, :, None] * p_y[:, None, :]  # (n, G+1, G+1)
+
+        corr = np.ones((len(lam), G + 1, G + 1))
+        corr[:, 0, 0] = 1.0 - lam * mu * self._rho
+        corr[:, 1, 0] = 1.0 + mu * self._rho
+        corr[:, 0, 1] = 1.0 + lam * self._rho
+        corr[:, 1, 1] = 1.0 - self._rho
+        joint *= corr
+        joint /= joint.sum(axis=(1, 2), keepdims=True)
+        return joint
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self._base.predict_xg(matches)
+        joint = self._joint_probs(xgs[:, 0], xgs[:, 1])
+        goals = np.arange(DC_MAX_GOALS + 1)
+        home_g = goals[:, None]
+        away_g = goals[None, :]
+        p_win = joint[:, home_g > away_g].sum(axis=1)
+        p_draw = joint[:, home_g == away_g].sum(axis=1)
+        p_loss = joint[:, home_g < away_g].sum(axis=1)
+        return np.stack([p_win, p_draw, p_loss], axis=1)
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray:
+        return self._base.predict_xg(matches)
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self._base.predict_xg(matches)
+        x = matches["home_score"].to_numpy().astype(int)
+        y = matches["away_score"].to_numpy().astype(int)
+        lam, mu = xgs[:, 0], xgs[:, 1]
+        tau = _dc_tau_vec(x, y, lam, mu, self._rho)
+        return (
+            np.log(np.clip(tau, 1e-15, None))
+            + scipy_poisson.logpmf(x, lam)
+            + scipy_poisson.logpmf(y, mu)
+        )
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self._base.predict_xg(matches)
+        joint = self._joint_probs(xgs[:, 0], xgs[:, 1])
+        flat = joint.reshape(len(xgs), -1).argmax(axis=1)
+        modal_h = flat // (DC_MAX_GOALS + 1)
+        modal_a = flat % (DC_MAX_GOALS + 1)
+        return np.stack([modal_h, modal_a], axis=1)
 
 
 @dataclass
@@ -305,6 +455,8 @@ def walk_forward(
             p.fit(train, elo_history, half_life, y)
             probs = p.predict_proba(test)
             xgs = p.predict_xg(test)
+            score_lls = p.predict_score_ll(test)
+            modal_scores = p.predict_modal_score(test)
 
             for i, (_, m) in enumerate(test.iterrows()):
                 rows.append(
@@ -323,6 +475,9 @@ def walk_forward(
                         "away_goals": int(m["away_score"]),
                         "xg_home": float(xgs[i, 0]) if xgs is not None else float("nan"),
                         "xg_away": float(xgs[i, 1]) if xgs is not None else float("nan"),
+                        "score_ll": float(score_lls[i]) if score_lls is not None else float("nan"),
+                        "modal_h": int(modal_scores[i, 0]) if modal_scores is not None else -1,
+                        "modal_a": int(modal_scores[i, 1]) if modal_scores is not None else -1,
                     }
                 )
 
@@ -337,6 +492,7 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "elo-only": EloOnlyPredictor(),
         "poisson": PoissonPredictor(use_elo=False),
         "poisson+elo": PoissonPredictor(use_elo=True),
+        "dc+elo": DixonColesPredictor(),
     }
     out: list[Predictor] = []
     for n in names:

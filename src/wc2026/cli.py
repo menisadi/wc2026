@@ -577,13 +577,23 @@ def backtest(
             act_h = sub["home_goals"].to_numpy()
             act_a = sub["away_goals"].to_numpy()
             mae_h, mae_a = goals_mae(xg_h, xg_a, act_h, act_a)
+            # Use per-match score_ll when available (supports DC correction);
+            # fall back to independent Poisson log-likelihood from xG.
+            if sub["score_ll"].notna().all():
+                jll = float(-sub["score_ll"].mean())
+                modal_h = sub["modal_h"].to_numpy()
+                modal_a = sub["modal_a"].to_numpy()
+                modal_acc = float(((modal_h == act_h) & (modal_a == act_a)).mean())
+            else:
+                jll = joint_poisson_loglik(xg_h, xg_a, act_h, act_a)
+                modal_acc = modal_accuracy(xg_h, xg_a, act_h, act_a)
             score_rows.append(
                 (
                     name,
-                    joint_poisson_loglik(xg_h, xg_a, act_h, act_a),
+                    jll,
                     mae_h,
                     mae_a,
-                    modal_accuracy(xg_h, xg_a, act_h, act_a),
+                    modal_acc,
                     len(sub),
                 )
             )
