@@ -148,12 +148,20 @@ def simulate_knockout_round(
     pairs: list[tuple[str, str]],
     model: PoissonModel,
     rng: np.random.Generator,
+    actual_results: ActualResults | None = None,
 ) -> list[str]:
     """Simulate one knockout round, return list of winners."""
     winners: list[str] = []
     for ta, tb in pairs:
-        winner, _ = model.simulate_knockout_match(ta, tb, rng)
-        winners.append(winner)
+        if actual_results is not None and (ta, tb) in actual_results:
+            ga, gb = actual_results[(ta, tb)]
+            if ga != gb:
+                winners.append(ta if ga > gb else tb)
+            else:
+                winners.append(ta if rng.random() < 0.5 else tb)
+        else:
+            winner, _ = model.simulate_knockout_match(ta, tb, rng)
+            winners.append(winner)
     return winners
 
 
@@ -249,23 +257,29 @@ def run_monte_carlo(
         for t in r32_teams:
             results.r32_counts[t] = results.r32_counts.get(t, 0) + 1
 
-        r16_teams = simulate_knockout_round(r32_pairs, model, rng)
+        r16_teams = simulate_knockout_round(r32_pairs, model, rng, actual_results)
         for t in r16_teams:
             results.r16_counts[t] = results.r16_counts.get(t, 0) + 1
 
-        qf_teams = simulate_knockout_round(pairs_from_winners(r16_teams), model, rng)
+        qf_teams = simulate_knockout_round(
+            pairs_from_winners(r16_teams), model, rng, actual_results
+        )
         for t in qf_teams:
             results.qf_counts[t] = results.qf_counts.get(t, 0) + 1
 
-        sf_teams = simulate_knockout_round(pairs_from_winners(qf_teams), model, rng)
+        sf_teams = simulate_knockout_round(pairs_from_winners(qf_teams), model, rng, actual_results)
         for t in sf_teams:
             results.sf_counts[t] = results.sf_counts.get(t, 0) + 1
 
-        finalists = simulate_knockout_round(pairs_from_winners(sf_teams), model, rng)
+        finalists = simulate_knockout_round(
+            pairs_from_winners(sf_teams), model, rng, actual_results
+        )
         for t in finalists:
             results.final_counts[t] = results.final_counts.get(t, 0) + 1
 
-        champion = simulate_knockout_round(pairs_from_winners(finalists), model, rng)[0]
+        champion = simulate_knockout_round(
+            pairs_from_winners(finalists), model, rng, actual_results
+        )[0]
         results.win_counts[champion] = results.win_counts.get(champion, 0) + 1
 
     return results

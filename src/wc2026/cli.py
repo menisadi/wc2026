@@ -478,7 +478,7 @@ def backtest(
     )
 
     requested = [n.strip() for n in baselines.split(",") if n.strip()]
-    predictor_names = [*requested, "poisson+elo"]
+    predictor_names = [*requested, *([] if "poisson+elo" in requested else ["poisson+elo"])]
 
     with _status("Loading data…", quiet):
         results = load_results(min_year=2000)
