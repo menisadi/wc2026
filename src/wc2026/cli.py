@@ -10,6 +10,7 @@ Commands:
 
 from __future__ import annotations
 
+import datetime
 from contextlib import nullcontext
 from typing import Any, cast
 
@@ -26,8 +27,16 @@ def _status(msg: str, quiet: bool):
     return nullcontext() if quiet else err_console.status(msg)
 
 
-def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple[Any, Any, Any]:
-    """Load all data, build features, train Poisson model. Returns (model, groups, strengths)."""
+def _load_and_train(
+    quiet: bool = False,
+    half_life: float = 3.0,
+    cutoff_date: datetime.date | None = None,
+) -> tuple[Any, Any, Any]:
+    """Load all data, build features, train Poisson model. Returns (model, groups, strengths).
+
+    When cutoff_date is set, training data and ELO are frozen to that date so
+    the model reflects only what was known before the tournament started.
+    """
     from wc2026.data.elo import load_or_compute_elo_history
     from wc2026.data.loader import (
         extract_groups,
@@ -45,6 +54,11 @@ def _load_and_train(quiet: bool = False, half_life: float = 3.0) -> tuple[Any, A
         # Self-computed ELO covers all 321 teams (vs ~48 in the bundled file).
         # Cached to data/elo_history_computed.csv; refresh-data regenerates it.
         elo_history = load_or_compute_elo_history()
+
+        if cutoff_date is not None:
+            results = results[results["date"].dt.date < cutoff_date].copy()
+            elo_history = elo_history[elo_history["year"] < cutoff_date.year].copy()
+
         # Latest computed rating per team — used for predict-time fallback. Must
         # match the source used in training (elo_history) to keep _elo_z consistent.
         elo = (
@@ -686,8 +700,6 @@ def backfill_snapshots(
     from wc2026.data.loader import DATA_DIR, RESULTS_TO_CANONICAL
     from wc2026.simulate.tournament import run_monte_carlo
 
-    model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
-
     raw = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
     wc = raw[
         (raw["tournament"] == "FIFA World Cup")
@@ -720,6 +732,13 @@ def backfill_snapshots(
             if date_str in existing_dates:
                 skipped += 1
                 continue
+
+            # Train on results up to and including this day so each snapshot
+            # reflects only what was known at that point in the tournament.
+            day_cutoff = day + datetime.timedelta(days=1)
+            model, groups, _ = _load_and_train(
+                quiet=quiet, half_life=half_life, cutoff_date=day_cutoff
+            )
 
             subset = wc[wc["date"].dt.date <= day]
             actual: dict[tuple[str, str], tuple[int, int]] = {}
