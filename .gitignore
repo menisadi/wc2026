@@ -15,3 +15,4 @@ data/elo_history_computed.csv
 
 # Secrets
 .env
+*.html
