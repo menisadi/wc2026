@@ -57,7 +57,6 @@ def _load_and_train(
 
         if cutoff_date is not None:
             results = results[results["date"].dt.date < cutoff_date].copy()
-            elo_history = elo_history[elo_history["year"] < cutoff_date.year].copy()
 
         # Latest computed rating per team — used for predict-time fallback. Must
         # match the source used in training (elo_history) to keep _elo_z consistent.
@@ -786,6 +785,8 @@ def backfill_snapshots(
             writer.writerow(["date", "team", "win_pct", "final_pct", "semi_pct"])
 
         for day in match_days:
+            if day >= datetime.date.today():
+                continue
             date_str = day.isoformat()
             if date_str in existing_dates:
                 skipped += 1
