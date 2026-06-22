@@ -681,14 +681,30 @@ def snapshot(
     skip_refresh: bool = typer.Option(
         False, "--skip-refresh", help="Skip live result fetch (use cached data as-is)."
     ),
+    no_backfill: bool = typer.Option(
+        False, "--no-backfill", help="Skip filling missing past match days; only write today."
+    ),
+    backfill_only: bool = typer.Option(
+        False, "--backfill-only", help="Fill missing past match days only; skip today's entry."
+    ),
 ) -> None:
-    """Append current win probabilities to data/probability_history.csv."""
+    """Save win probabilities to data/probability_history.csv.
+
+    By default refreshes live data, backfills any missing past match days,
+    then writes today's entry.  Use --no-backfill for a fast daily update,
+    or --backfill-only to fill gaps without touching today.
+    """
     import csv
-    from datetime import date
     from pathlib import Path
 
-    from wc2026.data.loader import load_wc2026_results
+    import pandas as pd
+
+    from wc2026.data.loader import DATA_DIR, RESULTS_TO_CANONICAL, load_wc2026_results
     from wc2026.simulate.tournament import run_monte_carlo
+
+    if no_backfill and backfill_only:
+        console.print("[red]--no-backfill and --backfill-only are mutually exclusive.[/red]")
+        raise typer.Exit(1)
 
     if not skip_refresh:
         from wc2026.data.elo import load_or_compute_elo_history
@@ -704,120 +720,97 @@ def snapshot(
         with _status("Recomputing ELO…", quiet):
             _ = load_or_compute_elo_history(force_refresh=True)
 
-    model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
-    actual = load_wc2026_results()
-
-    with _status(f"Running {simulations:,} simulations…", quiet):
-        sim = run_monte_carlo(groups, model, n=simulations, seed=seed, actual_results=actual)
-
-    ranked = sim.sorted_by_win_prob()
-    today = date.today().isoformat()
-    history_path = Path(__file__).parents[2] / "data" / "probability_history.csv"
-
-    existing_rows: list[list[str]] = []
-    if history_path.exists():
-        with history_path.open(newline="") as f:
-            reader = csv.reader(f)
-            next(reader, None)  # skip header
-            existing_rows = [row for row in reader if row and row[0] != today]
-
-    with history_path.open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["date", "team", "win_pct", "final_pct", "semi_pct"])
-        writer.writerows(existing_rows)
-        for team, p_win in ranked:
-            writer.writerow(
-                [
-                    today,
-                    team,
-                    f"{p_win:.4f}",
-                    f"{sim.final_prob(team):.4f}",
-                    f"{sim.sf_prob(team):.4f}",
-                ]
-            )
-
-    console.print(
-        f"[green]Snapshot saved:[/green] {len(ranked)} teams → [bold]{history_path}[/bold]"
-    )
-
-
-@app.command("backfill-snapshots")
-def backfill_snapshots(
-    simulations: int = typer.Option(10_000, "--sims", "-n", help="Number of Monte Carlo runs"),
-    seed: int | None = typer.Option(None, "--seed"),
-    quiet: bool = typer.Option(False, "--quiet", help="Suppress progress spinners"),
-    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
-) -> None:
-    """Create retroactive snapshots for each past WC 2026 match day."""
-    import csv
-    from pathlib import Path
-
-    import pandas as pd
-
-    from wc2026.data.loader import DATA_DIR, RESULTS_TO_CANONICAL
-    from wc2026.simulate.tournament import run_monte_carlo
-
-    raw = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
-    wc = raw[
-        (raw["tournament"] == "FIFA World Cup")
-        & (raw["date"].dt.year == 2026)
-        & raw["home_score"].notna()
-        & raw["away_score"].notna()
-    ].copy()
-
-    if wc.empty:
-        console.print("[yellow]No WC 2026 results found in results.csv.[/yellow]")
-        raise typer.Exit(0)
-
-    match_days = sorted(wc["date"].dt.date.unique())
-
     history_path = Path(__file__).parents[2] / "data" / "probability_history.csv"
     existing_dates: set[str] = set()
     if history_path.exists():
         existing_dates = set(pd.read_csv(history_path)["date"].unique())
 
-    write_header = not history_path.exists()
-    skipped = 0
+    # --- backfill missing past match days ---
+    if not no_backfill:
+        raw = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
+        wc = raw[
+            (raw["tournament"] == "FIFA World Cup")
+            & (raw["date"].dt.year == 2026)
+            & raw["home_score"].notna()
+            & raw["away_score"].notna()
+        ].copy()
 
-    with history_path.open("a", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
+        past_days = [d for d in sorted(wc["date"].dt.date.unique()) if d < datetime.date.today()]
+        missing = [d for d in past_days if d.isoformat() not in existing_dates]
+
+        if missing:
+            write_header = not history_path.exists()
+            with history_path.open("a", newline="") as f:
+                writer = csv.writer(f)
+                if write_header:
+                    writer.writerow(["date", "team", "win_pct", "final_pct", "semi_pct"])
+
+                for day in missing:
+                    date_str = day.isoformat()
+                    day_cutoff = day + datetime.timedelta(days=1)
+                    model, groups, _ = _load_and_train(
+                        quiet=quiet, half_life=half_life, cutoff_date=day_cutoff
+                    )
+
+                    subset = wc[wc["date"].dt.date <= day]
+                    actual: dict[tuple[str, str], tuple[int, int]] = {}
+                    for _, row in subset.iterrows():
+                        h = RESULTS_TO_CANONICAL.get(str(row["home_team"]), str(row["home_team"]))
+                        a = RESULTS_TO_CANONICAL.get(str(row["away_team"]), str(row["away_team"]))
+                        hs, as_ = int(row["home_score"]), int(row["away_score"])
+                        actual[(h, a)] = (hs, as_)
+                        actual[(a, h)] = (as_, hs)
+
+                    with _status(f"Backfilling {date_str} ({len(subset)} results)…", quiet):
+                        sim = run_monte_carlo(
+                            groups, model, n=simulations, seed=seed, actual_results=actual
+                        )
+
+                    ranked = sim.sorted_by_win_prob()
+                    for team, p_win in ranked:
+                        writer.writerow(
+                            [
+                                date_str,
+                                team,
+                                f"{p_win:.4f}",
+                                f"{sim.final_prob(team):.4f}",
+                                f"{sim.sf_prob(team):.4f}",
+                            ]
+                        )
+
+                    if not quiet:
+                        console.print(f"  [green]✓[/green] backfilled {date_str}")
+
+            console.print(f"[green]Backfill:[/green] {len(missing)} day(s) added.")
+        elif not quiet:
+            console.print("[dim]Backfill: history is up to date.[/dim]")
+
+    # --- today's snapshot ---
+    if not backfill_only:
+        model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
+        actual = load_wc2026_results()
+
+        with _status(f"Running {simulations:,} simulations…", quiet):
+            sim = run_monte_carlo(groups, model, n=simulations, seed=seed, actual_results=actual)
+
+        ranked = sim.sorted_by_win_prob()
+        today = datetime.date.today().isoformat()
+
+        existing_rows: list[list[str]] = []
+        if history_path.exists():
+            with history_path.open(newline="") as f:
+                reader = csv.reader(f)
+                next(reader, None)
+                existing_rows = [row for row in reader if row and row[0] != today]
+
+        with history_path.open("w", newline="") as f:
+            writer = csv.writer(f)
             writer.writerow(["date", "team", "win_pct", "final_pct", "semi_pct"])
-
-        for day in match_days:
-            if day >= datetime.date.today():
-                continue
-            date_str = day.isoformat()
-            if date_str in existing_dates:
-                skipped += 1
-                continue
-
-            # Train on results up to and including this day so each snapshot
-            # reflects only what was known at that point in the tournament.
-            day_cutoff = day + datetime.timedelta(days=1)
-            model, groups, _ = _load_and_train(
-                quiet=quiet, half_life=half_life, cutoff_date=day_cutoff
-            )
-
-            subset = wc[wc["date"].dt.date <= day]
-            actual: dict[tuple[str, str], tuple[int, int]] = {}
-            for _, row in subset.iterrows():
-                h = RESULTS_TO_CANONICAL.get(str(row["home_team"]), str(row["home_team"]))
-                a = RESULTS_TO_CANONICAL.get(str(row["away_team"]), str(row["away_team"]))
-                hs, as_ = int(row["home_score"]), int(row["away_score"])
-                actual[(h, a)] = (hs, as_)
-                actual[(a, h)] = (as_, hs)
-
-            with _status(f"Simulating as of {date_str} ({len(subset)} results)…", quiet):
-                sim = run_monte_carlo(
-                    groups, model, n=simulations, seed=seed, actual_results=actual
-                )
-
-            ranked = sim.sorted_by_win_prob()
+            writer.writerows(existing_rows)
             for team, p_win in ranked:
                 writer.writerow(
                     [
-                        date_str,
+                        today,
                         team,
                         f"{p_win:.4f}",
                         f"{sim.final_prob(team):.4f}",
@@ -825,11 +818,9 @@ def backfill_snapshots(
                     ]
                 )
 
-            if not quiet:
-                console.print(f"  [green]✓[/green] {date_str} ({len(subset)} result(s) locked in)")
-
-    total = len(match_days) - skipped
-    console.print(f"\n[green]Done.[/green] {total} new snapshot(s) added ({skipped} skipped).")
+        console.print(
+            f"[green]Snapshot saved:[/green] {len(ranked)} teams → [bold]{history_path}[/bold]"
+        )
 
 
 @app.command("show-history")
