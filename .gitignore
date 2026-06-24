@@ -16,3 +16,5 @@ data/elo_history_computed.csv
 # Secrets
 .env
 *.html
+# but keep the model documentation pages
+!docs/*.html

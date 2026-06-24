@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WC 2026 — The Elo Rating Mechanism</title>
+<style>
+  :root {
+    --bg: #0f1116; --panel: #171a21; --panel2: #1d212b; --ink: #e7ebf0;
+    --muted: #9aa4b2; --accent: #4fd1c5; --accent2: #f6ad55; --line: #2a2f3a;
+    --good: #68d391; --bad: #fc8181;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 32px; }
+  .eyebrow { color: var(--accent); letter-spacing: .14em; text-transform: uppercase; font-size: 12px; font-weight: 700; }
+  h1 { font-size: 32px; margin: 8px 0 4px; line-height: 1.2; }
+  h2 { font-size: 22px; margin: 40px 0 12px; border-left: 3px solid var(--accent); padding-left: 12px; }
+  h3 { font-size: 17px; margin: 28px 0 8px; color: var(--accent2); }
+  .lead { color: var(--muted); font-size: 18px; }
+  code { background: var(--panel2); padding: 2px 6px; border-radius: 5px; font-size: 14px;
+         font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: #d7e0ea; }
+  .formula {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 22px; margin: 18px 0; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 15px; overflow-x: auto; color: #e9f3f1;
+  }
+  .formula .big { font-size: 18px; color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; margin: 20px 0; }
+  .note { border-left: 3px solid var(--accent2); background: var(--panel2); padding: 12px 18px; border-radius: 0 8px 8px 0; margin: 18px 0; color: var(--muted); }
+  .note b { color: var(--ink); }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+  td code { background: none; padding: 0; }
+  .step { display: flex; gap: 16px; margin: 16px 0; align-items: flex-start; }
+  .step .num { flex: 0 0 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #06231f;
+               display: flex; align-items: center; justify-content: center; font-weight: 800; }
+  .step .body { flex: 1; }
+  .nav { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+  .nav a { text-decoration: none; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+           padding: 8px 14px; border-radius: 8px; font-size: 14px; }
+  .nav a:hover { border-color: var(--accent); }
+  .nav a.active { border-color: var(--accent); color: var(--accent); }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .src { color: var(--muted); font-size: 13px; }
+  .src code { font-size: 12px; }
+  .worked { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; margin: 18px 0; font-size: 14px; }
+  .worked .row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .worked .row:last-child { border-bottom: none; font-weight: 700; color: var(--good); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">FIFA World Cup 2026 · Prediction Engine</div>
+    <h1>The Elo Rating Mechanism</h1>
+    <p class="lead">A single number per nation that summarizes strength, updated match by
+    match across the entire history of international football.</p>
+    <nav class="nav">
+      <a href="model_overview.html">← Overview</a>
+      <a href="poisson.html">Poisson model</a>
+      <a class="active" href="elo.html">Elo ratings</a>
+    </nav>
+  </header>
+
+  <h2>What Elo gives the engine</h2>
+  <p>Elo is a self-correcting strength score. Beat a stronger team and you gain a lot; lose to
+  a weaker one and you drop a lot. Over thousands of matches it converges to a stable ranking.
+  In this project Elo plays two roles: it is a <b>standalone baseline predictor</b>, and &mdash;
+  more importantly &mdash; it feeds the global strength features that the
+  <a href="poisson.html">Poisson model</a> relies on for cross-tier matchups.</p>
+
+  <div class="note">
+    <b>Why self-compute it?</b> The bundled Elo file only covers the 48 World Cup 2026
+    qualifiers. The engine instead replays <code>results.csv</code> from scratch to build
+    ratings for <b>all 321 teams</b>, so no historical match gets dropped for a missing
+    rating, and there are no name-matching gaps by construction.
+  </div>
+
+  <h2>The update formula</h2>
+  <p>Walking matches in chronological order, after every game each team's rating moves by:</p>
+
+  <div class="formula">
+    <span class="big">R<sub>new</sub> = R<sub>old</sub> + K &middot; G &middot; (W &minus; W<sub>e</sub>)</span>
+  </div>
+
+  <table>
+    <tr><th>Term</th><th>What it is</th></tr>
+    <tr><td><code>W</code></td><td>actual result for the team: <b>1</b> win, <b>0.5</b> draw, <b>0</b> loss</td></tr>
+    <tr><td><code>W<sub>e</sub></code></td><td>expected result &mdash; the win-probability implied by the rating gap</td></tr>
+    <tr><td><code>K</code></td><td>step size: how much a single match can move the rating (depends on competition)</td></tr>
+    <tr><td><code>G</code></td><td>goal-difference multiplier: blowouts move ratings more</td></tr>
+  </table>
+
+  <h3>Expected result (the logistic curve)</h3>
+  <p>The rating gap is converted into a win expectation with the standard Elo logistic. The
+  home (non-neutral) side gets a <b>+100</b> rating bonus baked into the gap first:</p>
+  <div class="formula">
+    dr = (R<sub>home</sub> + <span style="color:var(--accent2)">100</span>) &minus; R<sub>away</sub>
+    &nbsp;&nbsp;(the +100 is dropped at neutral venues)<br><br>
+    W<sub>e</sub> = 1 / ( 1 + 10<sup>&minus;dr / 400</sup> )
+  </div>
+  <p>A 400-point edge means roughly a 10&times; higher implied odds of winning.</p>
+
+  <h3>K &mdash; the competition weight</h3>
+  <p>A World Cup result should shift perceptions more than a friendly. <code>K</code> is mapped
+  from the match's <code>tournament</code> column (eloratings.net conventions):</p>
+  <table>
+    <tr><th>Competition</th><th>K</th></tr>
+    <tr><td>World Cup finals</td><td><code>60</code></td></tr>
+    <tr><td>Continental finals (Euro, Copa, AFCON, Gold Cup, Nations League…)</td><td><code>50</code></td></tr>
+    <tr><td>Qualifiers</td><td><code>40</code></td></tr>
+    <tr><td>Other / default</td><td><code>30</code></td></tr>
+    <tr><td>Friendlies</td><td><code>20</code></td></tr>
+  </table>
+
+  <h3>G &mdash; the goal-difference multiplier</h3>
+  <p>Winning 5&ndash;0 is stronger evidence than winning 1&ndash;0, so the update scales with
+  the margin:</p>
+  <div class="formula">
+    G = 1.0&nbsp;&nbsp;if margin &le; 1<br>
+    G = 1.5&nbsp;&nbsp;if margin = 2<br>
+    G = (11 + N) / 8&nbsp;&nbsp;if margin N &ge; 3
+  </div>
+
+  <h2>A worked example</h2>
+  <p>Suppose home side <b>A</b> (1600) hosts <b>B</b> (1500) and wins <b>3&ndash;1</b> in a
+  World Cup match:</p>
+  <div class="worked">
+    <div class="row"><span>Rating gap with home bonus</span><span>dr = (1600 + 100) − 1500 = 200</span></div>
+    <div class="row"><span>Expected result</span><span>W<sub>e</sub> = 1/(1+10<sup>−200/400</sup>) ≈ 0.76</span></div>
+    <div class="row"><span>Actual result (win)</span><span>W = 1</span></div>
+    <div class="row"><span>Margin = 2 → multiplier</span><span>G = 1.5</span></div>
+    <div class="row"><span>K (World Cup)</span><span>60</span></div>
+    <div class="row"><span>Δ = K · G · (W − W<sub>e</sub>)</span><span>≈ 60 · 1.5 · 0.24 ≈ +21.6</span></div>
+    <div class="row"><span>New ratings</span><span>A → 1621.6, B → 1478.4</span></div>
+  </div>
+  <p>The change is zero-sum: whatever A gains, B loses.</p>
+
+  <h2>From a running rating to yearly snapshots</h2>
+  <div class="step"><div class="num">1</div><div class="body">
+    <b>Start everyone at 1500.</b> A new team's rating is seeded the first time it appears.
+  </div></div>
+  <div class="step"><div class="num">2</div><div class="body">
+    <b>Replay history in date order</b> (results from 1980 onward), applying the update after
+    each match.
+  </div></div>
+  <div class="step"><div class="num">3</div><div class="body">
+    <b>Record a year-end snapshot.</b> The output is one row per <code>(team, year)</code> using
+    the rating after that year's last match &mdash; columns <code>country, year, rating</code>.
+  </div></div>
+  <div class="step"><div class="num">4</div><div class="body">
+    <b>Cache it.</b> The history is written to <code>data/elo_history_computed.csv</code> and
+    recomputed by <code>refresh-data</code> / <code>snapshot</code> whenever new results land.
+  </div></div>
+
+  <div class="note">
+    The yearly schema is deliberately the same shape the Poisson model expects, so it can be
+    consumed unchanged. The Poisson fitter looks up each match's rating by
+    <code>(team, year)</code>, falling back to nearby years to absorb snapshot gaps.
+  </div>
+
+  <h2>How Poisson uses these ratings</h2>
+  <p>Two things flow into the <a href="poisson.html">Poisson model</a>: the
+  <b>per-match historical Elo</b> (standardized into <code>scorer_elo_z</code> /
+  <code>conceder_elo_z</code> training features) and the <b>latest rating per team</b> (the
+  predict-time strength used when a side has few or no training rows). Elo is also available
+  on its own as the <code>elo-only</code> backtest baseline.</p>
+
+  <footer>
+    <p class="src">Source: <code>src/wc2026/data/elo.py</code>
+    (<code>compute_elo_history</code>, <code>k_value</code>, <code>_goal_diff_multiplier</code>,
+    <code>load_or_compute_elo_history</code>).</p>
+    <p>Continue: <a href="poisson.html" style="color:var(--accent)">Poisson model →</a> ·
+       <a href="model_overview.html" style="color:var(--accent)">Full workflow →</a></p>
+  </footer>
+</div>
+</body>
+</html>

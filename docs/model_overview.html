@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WC 2026 — Model Overview &amp; Workflow</title>
+<style>
+  :root {
+    --bg: #0f1116; --panel: #171a21; --panel2: #1d212b; --ink: #e7ebf0;
+    --muted: #9aa4b2; --accent: #4fd1c5; --accent2: #f6ad55; --line: #2a2f3a;
+    --good: #68d391; --bad: #fc8181;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 32px; }
+  .eyebrow { color: var(--accent); letter-spacing: .14em; text-transform: uppercase; font-size: 12px; font-weight: 700; }
+  h1 { font-size: 34px; margin: 8px 0 4px; line-height: 1.2; }
+  h2 { font-size: 22px; margin: 44px 0 12px; border-left: 3px solid var(--accent); padding-left: 12px; }
+  h3 { font-size: 17px; margin: 26px 0 8px; color: var(--accent2); }
+  .lead { color: var(--muted); font-size: 18px; }
+  code { background: var(--panel2); padding: 2px 6px; border-radius: 5px; font-size: 14px;
+         font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: #d7e0ea; }
+  .note { border-left: 3px solid var(--accent2); background: var(--panel2); padding: 12px 18px; border-radius: 0 8px 8px 0; margin: 18px 0; color: var(--muted); }
+  .note b { color: var(--ink); }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+  td code { background: none; padding: 0; }
+  .nav { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+  .nav a { text-decoration: none; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+           padding: 8px 14px; border-radius: 8px; font-size: 14px; }
+  .nav a:hover { border-color: var(--accent); }
+  .nav a.active { border-color: var(--accent); color: var(--accent); }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .src { color: var(--muted); font-size: 13px; }
+  .src code { font-size: 12px; }
+
+  /* pipeline */
+  .pipe { display: flex; flex-direction: column; gap: 0; margin: 26px 0; }
+  .stage { display: flex; gap: 18px; align-items: stretch; }
+  .stage .rail { flex: 0 0 40px; display: flex; flex-direction: column; align-items: center; }
+  .stage .dot { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #06231f;
+                display: flex; align-items: center; justify-content: center; font-weight: 800; z-index: 1; }
+  .stage .line { width: 2px; flex: 1; background: var(--line); }
+  .stage:last-child .line { display: none; }
+  .stage .card { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                 padding: 16px 20px; margin-bottom: 18px; }
+  .stage .card h4 { margin: 0 0 6px; font-size: 16px; }
+  .stage .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .stage .card .tag { display:inline-block; background: var(--panel2); border:1px solid var(--line);
+                      border-radius: 6px; padding: 1px 8px; font-size: 12px; color: var(--accent); margin-top: 8px;
+                      font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 18px 0; }
+  .two .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; }
+  .two .box h4 { margin: 0 0 6px; }
+  .two .box p { margin: 0; color: var(--muted); font-size: 14px; }
+  @media (max-width: 640px) { .two { grid-template-columns: 1fr; } }
+  .bracket { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; margin: 18px 0; font-size: 14px; }
+  .bracket .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+  .bracket .row:last-child { border-bottom: none; }
+  .bracket .row span:first-child { color: var(--accent2); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">FIFA World Cup 2026 · Prediction Engine</div>
+    <h1>How the Model Works</h1>
+    <p class="lead">A high-level tour of the pipeline: from raw match data, through Elo and a
+    Poisson scoring model, to a Monte-Carlo simulation of the entire 48-team tournament.</p>
+    <nav class="nav">
+      <a class="active" href="model_overview.html">Overview</a>
+      <a href="poisson.html">Poisson model</a>
+      <a href="elo.html">Elo ratings</a>
+    </nav>
+  </header>
+
+  <h2>The big picture</h2>
+  <p>The engine answers questions like <em>&ldquo;who wins this match?&rdquo;</em> and
+  <em>&ldquo;who lifts the trophy?&rdquo;</em> by combining two complementary models. <b>Elo</b>
+  provides a global, self-correcting strength score for every nation. The <b>Poisson model</b>
+  turns strengths into expected goals and a full distribution of scorelines. A <b>Monte-Carlo
+  simulator</b> then plays the whole tournament tens of thousands of times to turn single-match
+  probabilities into trophy odds.</p>
+
+  <div class="two">
+    <div class="box">
+      <h4>🎯 Elo &mdash; strength</h4>
+      <p>One rating per team, updated after every historical match. The shared yardstick that
+      lets the engine compare teams that never meet. <a href="elo.html" style="color:var(--accent)">Read more →</a></p>
+    </div>
+    <div class="box">
+      <h4>⚽ Poisson &mdash; goals</h4>
+      <p>Learned attack/defense + Elo features → expected goals → win/draw/loss and scoreline
+      probabilities. <a href="poisson.html" style="color:var(--accent)">Read more →</a></p>
+    </div>
+  </div>
+
+  <h2>The pipeline, end to end</h2>
+  <p>Every command (<code>predict-match</code>, <code>simulate</code>, <code>snapshot</code>…)
+  runs the same load-and-train path before doing its specific job:</p>
+
+  <div class="pipe">
+    <div class="stage">
+      <div class="rail"><div class="dot">1</div><div class="line"></div></div>
+      <div class="card">
+        <h4>Load data</h4>
+        <p>Historical international results (2010+), the 2026 schedule, and FIFA rankings are
+        loaded. Team names are normalized to a single canonical form so nothing silently
+        mismatches.</p>
+        <span class="tag">load_results · load_schedule · load_rankings</span>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="rail"><div class="dot">2</div><div class="line"></div></div>
+      <div class="card">
+        <h4>Compute Elo history</h4>
+        <p>Replay all matches chronologically to build a per-year rating for every team
+        (all 321), cached to disk. This is the global strength signal.</p>
+        <span class="tag">load_or_compute_elo_history</span>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="rail"><div class="dot">3</div><div class="line"></div></div>
+      <div class="card">
+        <h4>Build team strengths</h4>
+        <p>For the 48 World Cup teams, assemble the latest Elo + ranking features used at
+        prediction time.</p>
+        <span class="tag">build_team_strengths</span>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="rail"><div class="dot">4</div><div class="line"></div></div>
+      <div class="card">
+        <h4>Train the Poisson model</h4>
+        <p>Fit attack/defense coefficients (+ Elo strength features) on recency-weighted
+        history. The result can produce xG for any pairing.</p>
+        <span class="tag">PoissonModel.fit</span>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="rail"><div class="dot">5</div><div class="line"></div></div>
+      <div class="card">
+        <h4>Extract groups &amp; simulate</h4>
+        <p>The 12 groups are recovered from the schedule, then the tournament is played out
+        thousands of times. Already-played 2026 results are injected as fixed outcomes.</p>
+        <span class="tag">extract_groups · run_monte_carlo</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Point-in-time correctness.</b> For historical snapshots, both the training data and the
+    Elo history are frozen to a <code>cutoff_date</code>, so each day's probabilities reflect
+    only what was known then &mdash; no leakage from future results.
+  </div>
+
+  <h2>Simulating the tournament</h2>
+  <p>One simulated tournament threads many single-match predictions through the real
+  competition format:</p>
+
+  <div class="bracket">
+    <div class="row"><span>Group stage</span><span>12 groups × 4 teams · round-robin, 3/1/0 points</span></div>
+    <div class="row"><span>Qualify</span><span>12 winners + 12 runners-up + 8 best third-place = 32</span></div>
+    <div class="row"><span>Round of 32</span><span>winners cross-paired vs runners-up; thirds paired together</span></div>
+    <div class="row"><span>R16 → QF → SF</span><span>single-elimination knockouts (draws → penalties, 50/50)</span></div>
+    <div class="row"><span>Final</span><span>last team standing = champion of this run</span></div>
+  </div>
+
+  <p>Each match outcome comes straight from the Poisson model: group games sample a scoreline,
+  knockout games sample until there's a winner. Run this <code>N</code> times (default
+  10,000&ndash;50,000) and count how often each team reaches each stage &mdash; that frequency
+  <em>is</em> the probability.</p>
+
+  <h3>Three scenario modes</h3>
+  <table>
+    <tr><th>Mode</th><th>Behaviour</th><th>Use</th></tr>
+    <tr><td><code>random</code></td><td>full Poisson sampling &mdash; anything can happen</td><td>true probability distribution over many runs</td></tr>
+    <tr><td><code>plausible</code></td><td>nucleus sampling &mdash; only the top-P% likeliest scorelines</td><td>a realistic single bracket with no freak results</td></tr>
+    <tr><td><code>modal</code></td><td>deterministic most-probable outcome each match</td><td>the single &ldquo;chalk&rdquo; bracket</td></tr>
+  </table>
+
+  <h2>What the engine can output</h2>
+  <table>
+    <tr><th>Command</th><th>Produces</th></tr>
+    <tr><td><code>predict-match</code></td><td>xG, W/D/L, and most-likely scorelines for one game (optionally ranked by expected value)</td></tr>
+    <tr><td><code>simulate</code></td><td>tournament-wide win / final / semifinal probabilities</td></tr>
+    <tr><td><code>show-scenario</code></td><td>one full bracket rendered to an HTML page (random / plausible / modal)</td></tr>
+    <tr><td><code>top-scorer</code></td><td>likely golden-boot candidates: recent scoring rate × expected matches played</td></tr>
+    <tr><td><code>snapshot</code> / <code>show-history</code></td><td>daily probability snapshots and how they shift as results come in</td></tr>
+    <tr><td><code>backtest</code></td><td>walk-forward evaluation vs baselines (log-loss, Brier, RPS, accuracy, calibration)</td></tr>
+  </table>
+
+  <h2>Is it any good? (backtesting)</h2>
+  <p>The model isn't taken on faith. <code>backtest</code> does a <b>walk-forward</b>
+  evaluation: train only on the past, predict each subsequent year's matches, and score the
+  probabilities with proper metrics (log-loss, Brier, ranked probability score, accuracy). It
+  competes against baselines &mdash; uniform, home-win, <code>elo-only</code>, a random Poisson,
+  and others &mdash; so any claimed skill is measured, not assumed. A calibration table checks
+  that, e.g., outcomes predicted at 30% actually happen ~30% of the time.</p>
+
+  <footer>
+    <p class="src">Sources: <code>src/wc2026/cli.py</code> (<code>_load_and_train</code> and each
+    command) and <code>poc.py</code> (single-file reference: <code>sim_group</code>,
+    <code>build_bracket</code>, <code>sim_knockout_round</code>, <code>sim_tournament</code>).</p>
+    <p>Dive deeper: <a href="poisson.html" style="color:var(--accent)">Poisson model →</a> ·
+       <a href="elo.html" style="color:var(--accent)">Elo ratings →</a></p>
+  </footer>
+</div>
+</body>
+</html>

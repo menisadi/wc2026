@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WC 2026 — The Poisson Match Model</title>
+<style>
+  :root {
+    --bg: #0f1116; --panel: #171a21; --panel2: #1d212b; --ink: #e7ebf0;
+    --muted: #9aa4b2; --accent: #4fd1c5; --accent2: #f6ad55; --line: #2a2f3a;
+    --good: #68d391; --bad: #fc8181;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 32px; }
+  .eyebrow { color: var(--accent); letter-spacing: .14em; text-transform: uppercase; font-size: 12px; font-weight: 700; }
+  h1 { font-size: 32px; margin: 8px 0 4px; line-height: 1.2; }
+  h2 { font-size: 22px; margin: 40px 0 12px; border-left: 3px solid var(--accent); padding-left: 12px; }
+  h3 { font-size: 17px; margin: 28px 0 8px; color: var(--accent2); }
+  p { color: var(--ink); }
+  .lead { color: var(--muted); font-size: 18px; }
+  code { background: var(--panel2); padding: 2px 6px; border-radius: 5px; font-size: 14px;
+         font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: #d7e0ea; }
+  .formula {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 22px; margin: 18px 0; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 15px; overflow-x: auto; color: #e9f3f1;
+  }
+  .formula .big { font-size: 18px; color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; margin: 20px 0; }
+  .note { border-left: 3px solid var(--accent2); background: var(--panel2); padding: 12px 18px; border-radius: 0 8px 8px 0; margin: 18px 0; color: var(--muted); }
+  .note b { color: var(--ink); }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+  td code { background: none; padding: 0; }
+  .step { display: flex; gap: 16px; margin: 16px 0; align-items: flex-start; }
+  .step .num { flex: 0 0 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #06231f;
+               display: flex; align-items: center; justify-content: center; font-weight: 800; }
+  .step .body { flex: 1; }
+  .nav { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+  .nav a { text-decoration: none; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+           padding: 8px 14px; border-radius: 8px; font-size: 14px; }
+  .nav a:hover { border-color: var(--accent); }
+  .nav a.active { border-color: var(--accent); color: var(--accent); }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .src { color: var(--muted); font-size: 13px; }
+  .src code { font-size: 12px; }
+  .pill { display:inline-block; background: var(--panel2); border:1px solid var(--line); border-radius: 999px;
+          padding: 2px 10px; font-size: 12px; color: var(--muted); margin-right: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">FIFA World Cup 2026 · Prediction Engine</div>
+    <h1>The Poisson Match Model</h1>
+    <p class="lead">How the engine turns two team names into expected goals, win/draw/loss
+    probabilities, and a full distribution of scorelines.</p>
+    <nav class="nav">
+      <a href="model_overview.html">← Overview</a>
+      <a class="active" href="poisson.html">Poisson model</a>
+      <a href="elo.html">Elo ratings</a>
+    </nav>
+  </header>
+
+  <h2>The core idea</h2>
+  <p>Goals in football arrive roughly at random throughout a match. If you know the
+  <em>rate</em> at which a team tends to score against a given opponent, the number of goals
+  it actually scores is well described by a <b>Poisson distribution</b>. The whole model is
+  built to estimate one number per side &mdash; the expected goals, <code>xG</code> &mdash;
+  and then let Poisson do the rest.</p>
+
+  <div class="formula">
+    <span class="big">P(k goals) = e<sup>&minus;&lambda;</sup> &middot; &lambda;<sup>k</sup> / k!</span><br>
+    &nbsp; where &lambda; = the team's expected goals (xG) for this match
+  </div>
+
+  <p>So the modelling problem reduces to: <b>given team A versus team B, what are &lambda;<sub>A</sub>
+  and &lambda;<sub>B</sub>?</b></p>
+
+  <h2>Estimating expected goals</h2>
+  <p>Each team gets two learned parameters:</p>
+  <table>
+    <tr><th>Parameter</th><th>Meaning</th></tr>
+    <tr><td><code>attack</code></td><td>how much this team inflates the goals it scores</td></tr>
+    <tr><td><code>defense</code></td><td>how much this team suppresses the goals it concedes</td></tr>
+  </table>
+
+  <p>For a match at a neutral venue (the World Cup regime), expected goals combine the
+  scorer's attack with the opponent's defense, on top of a shared baseline scoring rate:</p>
+
+  <div class="formula">
+    xG<sub>A</sub> = exp( <span style="color:var(--accent2)">intercept</span>
+      + attack<sub>A</sub> + defense<sub>B</sub>
+      + <span style="color:var(--accent)">elo&nbsp;term<sub>A</sub></span> )<br>
+    xG<sub>B</sub> = exp( <span style="color:var(--accent2)">intercept</span>
+      + attack<sub>B</sub> + defense<sub>A</sub>
+      + <span style="color:var(--accent)">elo&nbsp;term<sub>B</sub></span> )
+  </div>
+
+  <p>The <code>exp(&middot;)</code> guarantees a positive rate and makes the effects
+  multiplicative: a strong attack and a weak opposing defense compound. When team A is the
+  literal home side (not used for the neutral World Cup), a trained <code>home_adv</code>
+  term is added to its exponent.</p>
+
+  <div class="note">
+    <b>Why the exponential?</b> This is a <b>Poisson regression</b> (a generalized linear
+    model with a log link). The model learns the parameters on the log-scale, so the
+    additive terms inside <code>exp()</code> become multiplicative scoring multipliers.
+  </div>
+
+  <h2>How the parameters are learned</h2>
+  <p>The parameters are fit with scikit-learn's <code>PoissonRegressor</code> on every
+  international result since 2010. Each historical match becomes <b>two training rows</b>
+  &mdash; one for each team's goal tally &mdash; encoded into a sparse design matrix:</p>
+
+  <div class="formula">
+    columns&nbsp;=&nbsp;[ attack<sub>0..n&minus;1</sub> | defense<sub>0..n&minus;1</sub> | home_adv | scorer_elo_z | conceder_elo_z ]
+  </div>
+
+  <div class="step"><div class="num">1</div><div class="body">
+    <b>One-hot the teams.</b> The scorer's <code>attack</code> column and the conceder's
+    <code>defense</code> column are set to 1. So each row says &ldquo;these goals came from
+    <em>this</em> attack meeting <em>that</em> defense.&rdquo;
+  </div></div>
+  <div class="step"><div class="num">2</div><div class="body">
+    <b>Home advantage.</b> A single shared column is 1 for the home team's row and 0 at
+    neutral venues, so the model isolates the home boost from team strength.
+  </div></div>
+  <div class="step"><div class="num">3</div><div class="body">
+    <b>Recency weighting.</b> Older matches matter less. Each match gets an exponential
+    weight with a <b>3-year half-life</b> &mdash; a game from 3 years ago counts half as much
+    as a game today (<code>--half-life</code> tunes this).
+  </div></div>
+  <div class="step"><div class="num">4</div><div class="body">
+    <b>Elo features.</b> Two extra columns carry each side's standardized
+    <a href="elo.html">Elo rating</a> (<code>scorer_elo_z</code>, <code>conceder_elo_z</code>).
+    This is the key cross-tier signal &mdash; see below.
+  </div></div>
+
+  <h2>Why the Elo features matter</h2>
+  <p>Many national teams play almost exclusively against similar-strength regional rivals.
+  Without a global anchor, a minnow that goes 2&ndash;2 with its weak neighbours would learn
+  an &ldquo;average&rdquo; attack coefficient &mdash; collapsing the strength gap that should
+  exist against an elite side it never faces.</p>
+  <p>The two standardized Elo columns inject a <b>global strength axis</b> that every match
+  shares. They let the model express &ldquo;scoring against a 1900-rated defense is hard&rdquo;
+  even for pairings absent from the data. This also gives a clean fallback: a team with no
+  training rows contributes zero team-specific residual and is scored purely through its Elo
+  (its attack/defense default to 0).</p>
+
+  <div class="note">
+    <b>Coverage detail.</b> Elo here is the project's <a href="elo.html">self-computed
+    history covering all 321 teams</a>, not the bundled 48-team file &mdash; otherwise ~87% of
+    historical matches (any game touching a non-qualifier) would be silently dropped.
+  </div>
+
+  <h2>From xG to match outcomes</h2>
+  <p>Once <code>xG<sub>A</sub></code> and <code>xG<sub>B</sub></code> are known, the model
+  produces outcomes in two complementary ways:</p>
+
+  <h3>Analytical &mdash; exact probabilities</h3>
+  <p><code>win_draw_loss_probs()</code> assumes the two goal counts are independent Poisson
+  variables and sums the joint PMF over every scoreline grid cell:</p>
+  <div class="formula">
+    P(A wins) = &Sigma;<sub>a&gt;b</sub> P(a|xG<sub>A</sub>)&middot;P(b|xG<sub>B</sub>)<br>
+    P(draw)&nbsp;&nbsp;= &Sigma;<sub>a=b</sub> P(a|xG<sub>A</sub>)&middot;P(b|xG<sub>B</sub>)<br>
+    P(B wins) = &Sigma;<sub>a&lt;b</sub> P(a|xG<sub>A</sub>)&middot;P(b|xG<sub>B</sub>)
+  </div>
+
+  <h3>Simulated &mdash; sampling scorelines</h3>
+  <p>For the tournament, the model draws goals directly: <code>g ~ Poisson(xG)</code> for each
+  side. The CLI offers three sampling regimes built on this:</p>
+  <table>
+    <tr><th>Mode</th><th>How it samples</th></tr>
+    <tr><td><span class="pill">random</span></td><td>full Poisson draw &mdash; any scoreline can occur</td></tr>
+    <tr><td><span class="pill">plausible</span></td><td><b>nucleus sampling</b>: keep the most probable scorelines until their cumulative mass &ge; <code>confidence</code> (default 0.80), then sample from that set &mdash; excludes freak results</td></tr>
+    <tr><td><span class="pill">modal</span></td><td>deterministic: take the single most probable outcome (with knockout draws broken toward the side more likely to advance)</td></tr>
+  </table>
+
+  <h2>Putting it together (predict-match)</h2>
+  <p>Running <code>wc2026 predict-match Brazil Argentina</code> walks this exact path:
+  resolve names → look up each team's attack/defense + Elo → compute <code>xG</code> →
+  derive W/D/L analytically → Monte-Carlo 50,000 scorelines to rank the most likely results.
+  With <code>--ev</code> it reweights scorelines by a prediction-game points scheme instead of
+  raw probability.</p>
+
+  <footer>
+    <p class="src">Sources: <code>src/wc2026/model/poisson.py</code> (<code>PoissonModel.fit</code>,
+    <code>predict_xg</code>, <code>win_draw_loss_probs</code>, <code>simulate_nucleus_match</code>,
+    <code>predict_modal_match</code>) and <code>src/wc2026/cli.py</code> (<code>predict-match</code>).</p>
+    <p>Continue: <a href="elo.html" style="color:var(--accent)">Elo ratings →</a> ·
+       <a href="model_overview.html" style="color:var(--accent)">Full workflow →</a></p>
+  </footer>
+</div>
+</body>
+</html>
