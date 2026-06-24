@@ -430,6 +430,132 @@ class DixonColesPredictor:
         return np.stack([modal_h, modal_a], axis=1)
 
 
+class SupremacyTotalsPredictor:
+    """Decomposed prediction:
+      - supremacy: Ridge on (home_score - away_score) with per-team strengths
+      - totals:    PoissonRegressor on (home_score + away_score) with ELO-derived features
+    Recovers (xg_h, xg_a) = ((total ± diff) / 2) and defers to the same
+    independent-Poisson machinery as the other predictors.
+    """
+
+    name = "supremacy+totals"
+
+    def __init__(self) -> None:
+        from sklearn.linear_model import PoissonRegressor, Ridge
+
+        self._supremacy = Ridge(alpha=1.0)
+        self._totals = PoissonRegressor(alpha=0.01, max_iter=200)
+        self._idx: dict[str, int] = {}
+        self._ratings: dict[str, float] = {}
+        self._rating_mu: float = 1500.0
+        self._rating_sd: float = 200.0
+        self._rating_fallback: float = 1500.0
+
+    def _zscores(self, team: str) -> float:
+        return (self._ratings.get(team, self._rating_fallback) - self._rating_mu) / self._rating_sd
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        df = training.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
+        if df.empty:
+            return
+
+        if elo_history is not None and not elo_history.empty:
+            past = elo_history[elo_history["year"] < year_cutoff]
+            latest = past.sort_values("year").drop_duplicates("country", keep="last")
+            self._ratings = {str(c): float(r) for c, r in zip(latest["country"], latest["rating"])}
+        rating_vals = np.array(list(self._ratings.values()) or [1500.0])
+        self._rating_mu = float(rating_vals.mean())
+        self._rating_sd = float(rating_vals.std()) or 1.0
+        self._rating_fallback = float(np.median(rating_vals))
+
+        teams = sorted(set(df["home_team"]) | set(df["away_team"]))
+        self._idx = {t: i for i, t in enumerate(teams)}
+        n = len(teams)
+
+        age = (df["date"].max() - df["date"]).dt.days.to_numpy().astype(float)
+        w = np.exp(-np.log(2) * age / (half_life * 365.25))
+
+        X_sup = np.zeros((len(df), n + 2), dtype=np.float32)
+        X_tot = np.zeros((len(df), 3), dtype=np.float32)
+        y_sup = np.zeros(len(df), dtype=np.float32)
+        y_tot = np.zeros(len(df), dtype=np.float32)
+
+        home_teams = df["home_team"].tolist()
+        away_teams = df["away_team"].tolist()
+        home_scores = df["home_score"].to_numpy()
+        away_scores = df["away_score"].to_numpy()
+        neutrals = df["neutral"].to_numpy()
+
+        for i in range(len(df)):
+            h, a = home_teams[i], away_teams[i]
+            X_sup[i, self._idx[h]] = 1.0
+            X_sup[i, self._idx[a]] = -1.0
+            X_sup[i, n] = 0.0 if neutrals[i] else 1.0
+            hz = self._zscores(h)
+            az = self._zscores(a)
+            X_sup[i, n + 1] = hz - az
+            X_tot[i, 0] = abs(hz - az)
+            X_tot[i, 1] = (hz + az) / 2.0
+            X_tot[i, 2] = 0.0 if neutrals[i] else 1.0
+            y_sup[i] = home_scores[i] - away_scores[i]
+            y_tot[i] = home_scores[i] + away_scores[i]
+
+        _ = self._supremacy.fit(X_sup, y_sup, sample_weight=w)
+        _ = self._totals.fit(X_tot, y_tot, sample_weight=w)
+
+    def _features(self, matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        n = len(self._idx)
+        X_sup = np.zeros((len(matches), n + 2), dtype=np.float32)
+        X_tot = np.zeros((len(matches), 3), dtype=np.float32)
+        home_teams = matches["home_team"].tolist()
+        away_teams = matches["away_team"].tolist()
+        neutrals = matches["neutral"].to_numpy()
+        for i in range(len(matches)):
+            h, a = home_teams[i], away_teams[i]
+            if h in self._idx:
+                X_sup[i, self._idx[h]] = 1.0
+            if a in self._idx:
+                X_sup[i, self._idx[a]] = -1.0
+            X_sup[i, n] = 0.0 if neutrals[i] else 1.0
+            hz = self._zscores(h)
+            az = self._zscores(a)
+            X_sup[i, n + 1] = hz - az
+            X_tot[i, 0] = abs(hz - az)
+            X_tot[i, 1] = (hz + az) / 2.0
+            X_tot[i, 2] = 0.0 if neutrals[i] else 1.0
+        return X_sup, X_tot
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray:
+        X_sup, X_tot = self._features(matches)
+        diff = self._supremacy.predict(X_sup)
+        total = np.clip(self._totals.predict(X_tot), 0.1, None)
+        xg_h = np.maximum(0.05, (total + diff) / 2.0)
+        xg_a = np.maximum(0.05, (total - diff) / 2.0)
+        return np.stack([xg_h, xg_a], axis=1)
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self.predict_xg(matches)
+        out = np.empty((len(matches), 3))
+        for i in range(len(matches)):
+            out[i] = _wdl_from_xg(float(xgs[i, 0]), float(xgs[i, 1]))
+        return out
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self.predict_xg(matches)
+        x = matches["home_score"].to_numpy().astype(int)
+        y = matches["away_score"].to_numpy().astype(int)
+        return scipy_poisson.logpmf(x, xgs[:, 0]) + scipy_poisson.logpmf(y, xgs[:, 1])
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.floor(self.predict_xg(matches)).astype(int)
+
+
 @dataclass
 class BacktestResult:
     predictions: pd.DataFrame
@@ -533,6 +659,7 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "poisson": PoissonPredictor(use_elo=False),
         "poisson+elo": PoissonPredictor(use_elo=True),
         "dc+elo": DixonColesPredictor(),
+        "supremacy+totals": SupremacyTotalsPredictor(),
     }
     out: list[Predictor] = []
     for n in names:

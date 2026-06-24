@@ -25,7 +25,10 @@ build-backend = "hatchling.build"
 packages = ["src/wc2026"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pandas-stubs"]
+dev = [
+    "pytest>=8.0",
+    "pandas-stubs",
+]
 
 [tool.ruff]
 line-length = 100
