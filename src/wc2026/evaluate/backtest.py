@@ -556,6 +556,211 @@ class SupremacyTotalsPredictor:
         return np.floor(self.predict_xg(matches)).astype(int)
 
 
+def _skellam_logpmf_grad(
+    k: np.ndarray, lam1: np.ndarray, lam2: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorized Skellam log-pmf with analytical gradient wrt (lam1, lam2).
+
+    Uses scipy.special.ive (scaled modified Bessel) for numerical stability at
+    large lam.  Integer orders include negatives — I_{|k|-1}(z) when |k|=0 maps
+    to iv(-1, z) = iv(1, z) via the I_{-n}=I_n symmetry, so no special-casing.
+    """
+    from scipy.special import ive
+
+    z = 2.0 * np.sqrt(lam1 * lam2)
+    k_abs = np.abs(k)
+    ive_k = np.maximum(ive(k_abs, z), 1e-300)
+    ive_km = ive(k_abs - 1, z)
+    ive_kp = ive(k_abs + 1, z)
+    deriv_ratio = (ive_km + ive_kp) / (2.0 * ive_k)
+
+    logpmf = -lam1 - lam2 + (k / 2.0) * (np.log(lam1) - np.log(lam2)) + z + np.log(ive_k)
+    dlam1 = -1.0 + k / (2.0 * lam1) + deriv_ratio * np.sqrt(lam2 / lam1)
+    dlam2 = -1.0 - k / (2.0 * lam2) + deriv_ratio * np.sqrt(lam1 / lam2)
+    return logpmf, dlam1, dlam2
+
+
+class SkellamPredictor:
+    """Same parameterization as poisson+elo (attack/defense + home_adv + ELO z),
+    but fit to maximize Σ log Skellam.pmf(observed_diff | λ_h, λ_a) instead of
+    independent-Poisson joint likelihood.
+
+    Warm-started from PoissonRegressor, then refined with L-BFGS-B + analytical
+    gradient.  At predict time, treats (λ_h, λ_a) as independent Poissons for
+    score_ll / modal — only the *fitting* objective differs from poisson+elo.
+    """
+
+    name = "skellam"
+
+    def __init__(self) -> None:
+        self._idx: dict[str, int] = {}
+        self._n: int = 0
+        self._beta: np.ndarray = np.zeros(0)
+        self._ratings: dict[str, float] = {}
+        self._rating_mu: float = 1500.0
+        self._rating_sd: float = 200.0
+        self._rating_fallback: float = 1500.0
+
+    def _z(self, team: str) -> float:
+        return (self._ratings.get(team, self._rating_fallback) - self._rating_mu) / self._rating_sd
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        from scipy.optimize import minimize
+        from scipy.sparse import csr_matrix, lil_matrix
+        from sklearn.linear_model import PoissonRegressor
+
+        df = training.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
+        if df.empty:
+            return
+
+        if elo_history is not None and not elo_history.empty:
+            past = elo_history[elo_history["year"] < year_cutoff]
+            latest = past.sort_values("year").drop_duplicates("country", keep="last")
+            self._ratings = {str(c): float(r) for c, r in zip(latest["country"], latest["rating"])}
+        rating_vals = np.array(list(self._ratings.values()) or [1500.0])
+        self._rating_mu = float(rating_vals.mean())
+        self._rating_sd = float(rating_vals.std()) or 1.0
+        self._rating_fallback = float(np.median(rating_vals))
+
+        teams = sorted(set(df["home_team"]) | set(df["away_team"]))
+        self._idx = {t: i for i, t in enumerate(teams)}
+        n = len(teams)
+        self._n = n
+
+        h_idx = np.array([self._idx[t] for t in df["home_team"]])
+        a_idx = np.array([self._idx[t] for t in df["away_team"]])
+        is_home = (~df["neutral"].to_numpy()).astype(float)
+        z_h = np.array([self._z(t) for t in df["home_team"]])
+        z_a = np.array([self._z(t) for t in df["away_team"]])
+        home_goals = df["home_score"].to_numpy().astype(int)
+        away_goals = df["away_score"].to_numpy().astype(int)
+        diff = (home_goals - away_goals).astype(float)
+
+        age = (df["date"].max() - df["date"]).dt.days.to_numpy().astype(float)
+        w = np.exp(-np.log(2.0) * age / (half_life * 365.25))
+
+        # Warm-start via PoissonRegressor (independent-Poisson MLE).
+        X_ws = lil_matrix((2 * len(df), 2 * n + 3), dtype=np.float32)
+        y_ws = np.zeros(2 * len(df))
+        sw_ws = np.zeros(2 * len(df))
+        for i in range(len(df)):
+            X_ws[2 * i, h_idx[i]] = 1
+            X_ws[2 * i, n + a_idx[i]] = 1
+            X_ws[2 * i, 2 * n] = is_home[i]
+            X_ws[2 * i, 2 * n + 1] = z_h[i]
+            X_ws[2 * i, 2 * n + 2] = z_a[i]
+            X_ws[2 * i + 1, a_idx[i]] = 1
+            X_ws[2 * i + 1, n + h_idx[i]] = 1
+            X_ws[2 * i + 1, 2 * n + 1] = z_a[i]
+            X_ws[2 * i + 1, 2 * n + 2] = z_h[i]
+            y_ws[2 * i] = home_goals[i]
+            y_ws[2 * i + 1] = away_goals[i]
+            sw_ws[2 * i] = sw_ws[2 * i + 1] = w[i]
+
+        reg = PoissonRegressor(alpha=0.01, max_iter=200)
+        _ = reg.fit(csr_matrix(X_ws), y_ws, sample_weight=sw_ws)
+
+        # Parameter layout: [atk(n), def(n), intercept, home_adv, elo_atk, elo_def]
+        beta0 = np.zeros(2 * n + 4)
+        beta0[:n] = reg.coef_[:n]
+        beta0[n : 2 * n] = reg.coef_[n : 2 * n]
+        beta0[2 * n] = float(reg.intercept_)
+        beta0[2 * n + 1] = reg.coef_[2 * n]
+        beta0[2 * n + 2] = reg.coef_[2 * n + 1]
+        beta0[2 * n + 3] = reg.coef_[2 * n + 2]
+
+        l2 = 0.01
+
+        def loss_and_grad(beta: np.ndarray) -> tuple[float, np.ndarray]:
+            atk = beta[:n]
+            dfe = beta[n : 2 * n]
+            intercept = beta[2 * n]
+            ha = beta[2 * n + 1]
+            ea = beta[2 * n + 2]
+            ed = beta[2 * n + 3]
+
+            log_l1 = intercept + atk[h_idx] + dfe[a_idx] + ha * is_home + ea * z_h + ed * z_a
+            log_l2 = intercept + atk[a_idx] + dfe[h_idx] + ea * z_a + ed * z_h
+            lam1 = np.clip(np.exp(log_l1), 1e-6, 50.0)
+            lam2 = np.clip(np.exp(log_l2), 1e-6, 50.0)
+
+            logpmf, dlam1, dlam2 = _skellam_logpmf_grad(diff, lam1, lam2)
+            neg_ll = float(-(w * logpmf).sum() + 0.5 * l2 * (beta @ beta))
+
+            g_logl1 = dlam1 * lam1
+            g_logl2 = dlam2 * lam2
+
+            grad = np.zeros_like(beta)
+            np.add.at(grad[:n], h_idx, -w * g_logl1)
+            np.add.at(grad[:n], a_idx, -w * g_logl2)
+            np.add.at(grad[n : 2 * n], a_idx, -w * g_logl1)
+            np.add.at(grad[n : 2 * n], h_idx, -w * g_logl2)
+            grad[2 * n] = float(-(w * (g_logl1 + g_logl2)).sum())
+            grad[2 * n + 1] = float(-(w * is_home * g_logl1).sum())
+            grad[2 * n + 2] = float(-(w * (z_h * g_logl1 + z_a * g_logl2)).sum())
+            grad[2 * n + 3] = float(-(w * (z_a * g_logl1 + z_h * g_logl2)).sum())
+            grad += l2 * beta
+            return neg_ll, grad
+
+        result = minimize(
+            loss_and_grad,
+            beta0,
+            jac=True,
+            method="L-BFGS-B",
+            options={"maxiter": 100, "ftol": 1e-8},
+        )
+        self._beta = result.x
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray:
+        n = self._n
+        beta = self._beta
+        atk = beta[:n]
+        dfe = beta[n : 2 * n]
+        intercept = beta[2 * n]
+        ha = beta[2 * n + 1]
+        ea = beta[2 * n + 2]
+        ed = beta[2 * n + 3]
+
+        out = np.empty((len(matches), 2))
+        for i, (_, m) in enumerate(matches.iterrows()):
+            h, a = str(m["home_team"]), str(m["away_team"])
+            hi = self._idx.get(h, -1)
+            ai = self._idx.get(a, -1)
+            atk_h = float(atk[hi]) if hi >= 0 else 0.0
+            atk_a = float(atk[ai]) if ai >= 0 else 0.0
+            def_h = float(dfe[hi]) if hi >= 0 else 0.0
+            def_a = float(dfe[ai]) if ai >= 0 else 0.0
+            z_h = self._z(h)
+            z_a = self._z(a)
+            is_home = 0.0 if bool(m["neutral"]) else 1.0
+            log_lh = intercept + atk_h + def_a + ha * is_home + ea * z_h + ed * z_a
+            log_la = intercept + atk_a + def_h + ea * z_a + ed * z_h
+            out[i] = [float(np.exp(log_lh)), float(np.exp(log_la))]
+        return out
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self.predict_xg(matches)
+        out = np.empty((len(matches), 3))
+        for i in range(len(matches)):
+            out[i] = _wdl_from_xg(float(xgs[i, 0]), float(xgs[i, 1]))
+        return out
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self.predict_xg(matches)
+        x = matches["home_score"].to_numpy().astype(int)
+        y = matches["away_score"].to_numpy().astype(int)
+        return scipy_poisson.logpmf(x, xgs[:, 0]) + scipy_poisson.logpmf(y, xgs[:, 1])
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.floor(self.predict_xg(matches)).astype(int)
+
+
 @dataclass
 class BacktestResult:
     predictions: pd.DataFrame
@@ -660,6 +865,7 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "poisson+elo": PoissonPredictor(use_elo=True),
         "dc+elo": DixonColesPredictor(),
         "supremacy+totals": SupremacyTotalsPredictor(),
+        "skellam": SkellamPredictor(),
     }
     out: list[Predictor] = []
     for n in names:
