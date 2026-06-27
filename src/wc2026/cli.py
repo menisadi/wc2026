@@ -37,7 +37,11 @@ def _load_and_train(
     When cutoff_date is set, training data and ELO are frozen to that date so
     the model reflects only what was known before the tournament started.
     """
-    from wc2026.data.elo import load_or_compute_elo_history
+    from wc2026.data.elo import (
+        ELO_COMPUTE_MIN_YEAR,
+        compute_elo_history,
+        load_or_compute_elo_history,
+    )
     from wc2026.data.loader import (
         extract_groups,
         load_rankings,
@@ -51,12 +55,19 @@ def _load_and_train(
         results = load_results(min_year=2010)
         schedule = load_schedule()
         rankings = load_rankings()
-        # Self-computed ELO covers all 321 teams (vs ~48 in the bundled file).
-        # Cached to data/elo_history_computed.csv; refresh-data regenerates it.
-        elo_history = load_or_compute_elo_history()
 
         if cutoff_date is not None:
             results = results[results["date"].dt.date < cutoff_date].copy()
+            # Recompute ELO from results frozen to the cutoff. The cached history
+            # is yearly and reflects all played games, so reusing it would leak
+            # post-cutoff results into ratings/strengths.
+            frozen = load_results(min_year=ELO_COMPUTE_MIN_YEAR)
+            frozen = frozen[frozen["date"].dt.date < cutoff_date]
+            elo_history = compute_elo_history(frozen)
+        else:
+            # Self-computed ELO covers all 321 teams (vs ~48 in the bundled file).
+            # Cached to data/elo_history_computed.csv; refresh-data regenerates it.
+            elo_history = load_or_compute_elo_history()
 
         # Latest computed rating per team — used for predict-time fallback. Must
         # match the source used in training (elo_history) to keep _elo_z consistent.
@@ -112,6 +123,16 @@ def predict_match(
         "--stage",
         help=("Tournament stage for EV scoring: group | r32 | r16 | qf | sf | 3rd | final"),
     ),
+    cutoff_date: datetime.datetime = typer.Option(
+        None,
+        "--cutoff-date",
+        formats=["%Y-%m-%d"],
+        help=(
+            "Freeze training data and ELO to before this date (YYYY-MM-DD) so the "
+            "prediction reflects only what was known beforehand. Avoids leaking a "
+            "match's own result into the model when re-predicting played games."
+        ),
+    ),
 ) -> None:
     """Predict the outcome of a single match between TEAM_A and TEAM_B."""
     from wc2026.data.loader import SCHEDULE_TO_CANONICAL, load_schedule
@@ -140,7 +161,10 @@ def predict_match(
         team_b = row["away_team"]
         game_header = f"Game {game} ({row['Day']} {row['Date'].date()}): "
 
-    model, groups, strengths = _load_and_train(half_life=half_life)
+    model, groups, strengths = _load_and_train(
+        half_life=half_life,
+        cutoff_date=cutoff_date.date() if cutoff_date is not None else None,
+    )
 
     all_known = set(model._teams) | set(strengths.keys())
 
