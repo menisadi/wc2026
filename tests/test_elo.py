@@ -178,3 +178,42 @@ def test_compute_elo_yearly_snapshots() -> None:
     years = set(hist["year"].unique())
     assert years == {2020, 2021}
     assert len(hist) == 4  # 2 teams × 2 years
+
+
+def test_compute_elo_respects_date_cutoff() -> None:
+    """Filtering results by date before computing Elo must exclude later games.
+
+    Guards the leak fix in `_load_and_train`/`snapshot`: freezing to a cutoff
+    has to drop a match's own (and any future) result from the ratings, not just
+    from the Poisson training set.
+    """
+    rows = [
+        {
+            "date": "2026-06-11",
+            "home_team": "A",
+            "away_team": "B",
+            "home_score": 1,
+            "away_score": 0,
+            "neutral": True,
+            "tournament": "FIFA World Cup",
+        },
+        {
+            "date": "2026-06-25",
+            "home_team": "A",
+            "away_team": "B",
+            "home_score": 3,
+            "away_score": 0,
+            "neutral": True,
+            "tournament": "FIFA World Cup",
+        },
+    ]
+    full = _toy(rows)
+    cutoff = pd.Timestamp("2026-06-25").date()
+    frozen = full[full["date"].dt.date < cutoff]
+
+    full_rating = cast(float, compute_elo_history(full).set_index("country").loc["A", "rating"])
+    frozen_rating = cast(float, compute_elo_history(frozen).set_index("country").loc["A", "rating"])
+
+    # The frozen rating reflects only the first win; the full rating also absorbs
+    # the second win, so it must be strictly higher.
+    assert frozen_rating < full_rating
