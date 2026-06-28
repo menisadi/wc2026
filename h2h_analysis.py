@@ -495,13 +495,27 @@ def cmd_profile(args: argparse.Namespace, records: pd.DataFrame, console: Consol
 
 
 def cmd_pair(args: argparse.Namespace, records: pd.DataFrame, console: Console) -> None:
-    if getattr(args, "game", None) is not None:
+    if getattr(args, "game", None) is not None and args.game > 72:
+        from wc2026.data.loader import load_knockout_fixtures
+
+        fixtures = load_knockout_fixtures()
+        if args.game not in fixtures:
+            drawn = sorted(fixtures)
+            avail = f"{drawn[0]}-{drawn[-1]}" if drawn else "none drawn yet"
+            console.print(
+                f"[red]--game {args.game} is not a drawn knockout fixture[/red] "
+                f"(available: {avail})."
+            )
+            return
+        t1, t2 = fixtures[args.game]
+        console.print(f"[dim]Match {args.game} (R32): {t1} vs {t2}[/dim]\n")
+    elif getattr(args, "game", None) is not None:
         from wc2026.data.loader import load_schedule
 
         schedule = load_schedule()
         group_games = schedule[schedule["Round"] == "Group stage"].reset_index(drop=True)
         if not 1 <= args.game <= len(group_games):
-            console.print(f"[red]--game must be between 1 and {len(group_games)}.[/red]")
+            console.print(f"[red]--game must be 1-{len(group_games)} (group) or 73-88 (R32).[/red]")
             return
         row = group_games.iloc[args.game - 1]
         t1, t2 = str(row["home_team"]), str(row["away_team"])
@@ -649,7 +663,9 @@ def main() -> None:
         type=int,
         default=None,
         metavar="N",
-        help="WC 2026 group-stage game number (1-based); overrides TEAM1/TEAM2.",
+        help=(
+            "WC 2026 match number; overrides TEAM1/TEAM2. 1-72 = group stage, 73-88 = Round of 32."
+        ),
     )
 
     # ── profile ───────────────────────────────────────────────────────────────

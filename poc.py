@@ -30,6 +30,10 @@ RESULTS_NORM: dict[str, str] = {
     "Cape Verde Islands": "Cape Verde",
 }
 
+# Extra time is 30 min; goals scale with time, so its scoring rate is 30/90 of regulation.
+# Knockout results are taken after 120 min (penalties excluded).
+ET_GOALS_FRACTION = 30.0 / 90.0
+
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -73,6 +77,25 @@ def load_wc2026_results() -> dict[tuple[str, str], tuple[int, int]]:
         out[(h, a)] = (hs, as_)
         out[(a, h)] = (as_, hs)
     return out
+
+
+def load_knockout_bracket() -> list[tuple[str, str]] | None:
+    """Real Round-of-32 matchups in official bracket-tree order, or None if absent.
+
+    The order is load-bearing: adjacent pairs feed the same later-round match. Once the
+    group stage is over this replaces the approximate ``build_bracket`` below.
+    """
+    path = DATA_DIR.parent / "knockout_bracket.csv"
+    if not path.exists():
+        return None
+    df = pd.read_csv(path, comment="#")
+    return [
+        (
+            RESULTS_NORM.get(str(row["home"]), str(row["home"])),
+            RESULTS_NORM.get(str(row["away"]), str(row["away"])),
+        )
+        for _, row in df.iterrows()
+    ]
 
 
 def extract_groups(schedule: pd.DataFrame) -> dict[str, list[str]]:
@@ -307,6 +330,16 @@ def build_bracket(standings: dict[str, list[Standing]]) -> list[tuple[str, str]]
     return pairs  # 16 matches
 
 
+def play_knockout(model: PoissonModel, a: str, b: str, rng: np.random.Generator) -> tuple[int, int]:
+    """120-minute scoreline: 90 min, then extra time if level (penalties excluded)."""
+    ga, gb = model.play(a, b, rng)
+    if ga == gb:
+        xa, xb = model.xg(a, b)
+        ga += int(rng.poisson(xa * ET_GOALS_FRACTION))
+        gb += int(rng.poisson(xb * ET_GOALS_FRACTION))
+    return ga, gb
+
+
 def sim_knockout_round(
     teams: list[str],
     model: PoissonModel,
@@ -319,11 +352,11 @@ def sim_knockout_round(
         if actual is not None and (a, b) in actual:
             ga, gb = actual[(a, b)]
         else:
-            ga, gb = model.play(a, b, rng)
+            ga, gb = play_knockout(model, a, b, rng)
         if ga != gb:
             winners.append(a if ga > gb else b)
         else:
-            winners.append(a if rng.random() < 0.5 else b)
+            winners.append(a if rng.random() < 0.5 else b)  # penalties
     return winners
 
 
@@ -332,9 +365,10 @@ def sim_tournament(
     model: PoissonModel,
     rng: np.random.Generator,
     actual: dict[tuple[str, str], tuple[int, int]] | None = None,
+    r32_override: list[tuple[str, str]] | None = None,
 ) -> str:
     standings = {g: sim_group(teams, model, rng, actual) for g, teams in groups.items()}
-    r32_pairs = build_bracket(standings)
+    r32_pairs = r32_override or build_bracket(standings)
     r32_teams = [t for pair in r32_pairs for t in pair]  # flatten to ordered list
 
     r16 = sim_knockout_round(r32_teams, model, rng, actual)  # 32 → 16
@@ -368,6 +402,8 @@ def main() -> None:
     results, schedule, elo, elo_history = load_data()
     groups = extract_groups(schedule)
     actual = load_wc2026_results()
+    # Once the group stage is over, fix the knockout draw to the real bracket.
+    r32 = load_knockout_bracket()
 
     wc_teams = [t for teams in groups.values() for t in teams]
     elo_wc = elo[elo.index.isin(wc_teams)]
@@ -380,7 +416,7 @@ def main() -> None:
         print(f"Running {args.sims:,} simulations…")
     rng = np.random.default_rng(args.seed)
     wins: Counter[str] = Counter(
-        sim_tournament(groups, model, rng, actual) for _ in range(args.sims)
+        sim_tournament(groups, model, rng, actual, r32_override=r32) for _ in range(args.sims)
     )
 
     if args.csv:
