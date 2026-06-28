@@ -83,12 +83,15 @@ def load_knockout_bracket() -> list[tuple[str, str]] | None:
     """Real Round-of-32 matchups in official bracket-tree order, or None if absent.
 
     The order is load-bearing: adjacent pairs feed the same later-round match. Once the
-    group stage is over this replaces the approximate ``build_bracket`` below.
+    group stage is over this replaces the approximate ``build_bracket`` below. Only the
+    Round-of-32 rows (match 73-88) are used, so later-round fixtures may live in the same
+    CSV without affecting the simulation.
     """
     path = DATA_DIR.parent / "knockout_bracket.csv"
     if not path.exists():
         return None
     df = pd.read_csv(path, comment="#")
+    df = df[df["r32_match"].between(73, 88)]
     return [
         (
             RESULTS_NORM.get(str(row["home"]), str(row["home"])),

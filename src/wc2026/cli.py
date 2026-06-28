@@ -156,7 +156,19 @@ def predict_match(
 
     game_header = ""
     if game is not None and game > 72:
-        # Knockout fixture by official match number (Round of 32 = 73-88).
+        # Knockout fixture by official FIFA match number. Round of 32 = 73-88.
+        #
+        # HOW TO ENABLE LATER ROUNDS (R16/QF/SF/final), once they are drawn:
+        #   1. Add their fixtures to data/knockout_bracket.csv with the official match
+        #      numbers (R16 = 89-96, QF = 97-100, SF = 101-102, 3rd = 103, final = 104).
+        #      The simulator override (load_knockout_bracket) uses only rows 73-88, so
+        #      later-round rows are picked up by this --game lookup without affecting it.
+        #      Keep the R32 rows in tree order. (Or pull them with `wc2026 refresh-data`.)
+        #   2. Replace the hard-coded "r32"/"(R32)" below with a match-number → stage
+        #      mapping, e.g. 73-88→r32, 89-96→r16, 97-100→qf, 101-102→sf, 103→"3rd",
+        #      104→final, so --ev scoring and the 120-min model pick the right round.
+        # Until then you can always predict a later-round tie by name:
+        #   wc2026 predict-match TeamA TeamB --stage r16 --ev
         fixtures = load_knockout_fixtures()
         if game not in fixtures:
             drawn = sorted(fixtures)

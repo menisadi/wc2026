@@ -105,10 +105,14 @@ def load_knockout_bracket() -> list[tuple[str, str]] | None:
     the same Round-of-16 match, and so on up to the final (see data/knockout_bracket.csv).
     Pass it as `r32_override` to the tournament simulator so win probabilities reflect the
     real draw instead of the approximate bracket built from simulated standings.
+
+    Only the Round-of-32 rows (match 73-88) are returned, so later-round fixtures may be
+    added to the same CSV (for `--game` lookup) without breaking the simulator override.
     """
     if not KNOCKOUT_BRACKET_PATH.exists():
         return None
     df = pd.read_csv(KNOCKOUT_BRACKET_PATH, comment="#")
+    df = df[df["r32_match"].between(73, 88)]
     pairs: list[tuple[str, str]] = []
     for _, row in df.iterrows():
         home = _normalize(str(row["home"]), RESULTS_TO_CANONICAL)
