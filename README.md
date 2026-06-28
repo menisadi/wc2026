@@ -54,7 +54,21 @@ Walk-forward backtest: train on past data, predict each year, score W/D/L log-lo
 ```bash
 wc2026 refresh-data
 ```
-Re-download all Kaggle datasets and patch in live WC 2026 results.
+Re-download all Kaggle datasets, patch in live WC 2026 results, and cross-check the
+committed knockout bracket against the live draw.
+
+## Knockout bracket
+
+Once the group stage ends, `simulate`, `snapshot`, and `show-scenario` fix the Round-of-32
+matchups to the real draw stored in `data/knockout_bracket.csv` (passed as `r32_override`),
+instead of the approximate bracket built from simulated standings. That file is the **single
+source of truth**: its 16 rows are ordered by the official bracket tree (adjacent pairs feed
+the same Round-of-16 match, and so on up to the final), so **don't re-sort them**.
+
+`refresh-data` fetches the live draw from football-data.org and warns if the matchup *set*
+differs from the committed file — but the API does not encode the tree order, so the file's
+ordering stays authoritative and updates are manual. Before the group stage ends (or if the
+file is absent) the simulator falls back to the approximate bracket automatically.
 
 ## Data sources
 

@@ -3,6 +3,8 @@ from pathlib import Path
 import pandas as pd
 
 DATA_DIR = Path(__file__).parents[3] / "data" / "raw"
+# Knockout bracket lives outside raw/ — it is hand-curated, not a downloaded dataset.
+KNOCKOUT_BRACKET_PATH = Path(__file__).parents[3] / "data" / "knockout_bracket.csv"
 
 # Map names used in schedule_2026.csv → names used in results.csv (canonical)
 SCHEDULE_TO_CANONICAL: dict[str, str] = {
@@ -93,6 +95,26 @@ def load_wc2026_results() -> dict[tuple[str, str], tuple[int, int]]:
         out[(h, a)] = (hs, as_)
         out[(a, h)] = (as_, hs)
     return out
+
+
+def load_knockout_bracket() -> list[tuple[str, str]] | None:
+    """Return the Round-of-32 matchups in official bracket-tree order, or None if absent.
+
+    The list of 16 (home, away) pairs is the single source of truth for the knockout
+    bracket once the group stage is over. Its order encodes the tree: adjacent pairs feed
+    the same Round-of-16 match, and so on up to the final (see data/knockout_bracket.csv).
+    Pass it as `r32_override` to the tournament simulator so win probabilities reflect the
+    real draw instead of the approximate bracket built from simulated standings.
+    """
+    if not KNOCKOUT_BRACKET_PATH.exists():
+        return None
+    df = pd.read_csv(KNOCKOUT_BRACKET_PATH, comment="#")
+    pairs: list[tuple[str, str]] = []
+    for _, row in df.iterrows():
+        home = _normalize(str(row["home"]), RESULTS_TO_CANONICAL)
+        away = _normalize(str(row["away"]), RESULTS_TO_CANONICAL)
+        pairs.append((home, away))
+    return pairs
 
 
 def load_goalscorers(min_year: int = 2018) -> pd.DataFrame:

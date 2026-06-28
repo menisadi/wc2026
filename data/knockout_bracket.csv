@@ -1,0 +1,32 @@
+# WC 2026 knockout bracket — Round of 32, the single source of truth for the simulator.
+#
+# Rows are ordered by the OFFICIAL bracket tree so that adjacent pairs combine up the
+# tree: rows 0&1 feed one Round-of-16 match, 2&3 the next, ...; the resulting R16
+# winners pair up the same way into the quarter-finals, then semis, then final. This
+# ordering is what `pairs_from_winners` relies on, so DO NOT re-sort these rows.
+#
+# `r32_match` is the official FIFA match number (M73–M88), kept only for traceability.
+# Names are canonical (must match the names the simulator/results use, e.g. "Cape Verde",
+# "DR Congo", "Bosnia and Herzegovina", "Ivory Coast", "United States").
+#
+# Source: official FIFA bracket — en.wikipedia.org/wiki/2026_FIFA_World_Cup_knockout_stage
+# (R16 pairings cross-checked vs Sky Sports and football-data.org, 2026-06-28).
+# Regenerate/verify the matchup SET with `wc2026 refresh-data` (football-data.org), but the
+# tree ORDER below stays authoritative — the API does not encode it.
+r32_match,home,away
+74,Germany,Paraguay
+77,France,Sweden
+73,South Africa,Canada
+75,Netherlands,Morocco
+83,Spain,Austria
+84,Portugal,Croatia
+81,United States,Bosnia and Herzegovina
+82,Belgium,Senegal
+76,Brazil,Japan
+78,Ivory Coast,Norway
+79,Mexico,Ecuador
+80,England,DR Congo
+86,Argentina,Cape Verde
+88,Australia,Egypt
+85,Switzerland,Algeria
+87,Colombia,Ghana

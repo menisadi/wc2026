@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from wc2026.data.loader import DATA_DIR
+from wc2026.data.loader import DATA_DIR, RESULTS_TO_CANONICAL
 
 _API_BASE = "https://api.football-data.org/v4"
 _WC_SEASON = "2026"
@@ -27,7 +27,10 @@ _FD_TO_CANONICAL: dict[str, str] = {
 
 
 def _canonical(name: str) -> str:
-    return _FD_TO_CANONICAL.get(name, name)
+    # Apply football-data → canonical, then the results.csv normalization
+    # (e.g. "Cape Verde Islands" → "Cape Verde") so names match the simulator.
+    name = _FD_TO_CANONICAL.get(name, name)
+    return RESULTS_TO_CANONICAL.get(name, name)
 
 
 def _get_api_key() -> str:
@@ -50,6 +53,33 @@ def fetch_finished_matches() -> list[dict[str, Any]]:
     with urllib.request.urlopen(req) as r:
         data = json.loads(r.read())
     return data.get("matches", [])
+
+
+def fetch_knockout_bracket(stage: str = "LAST_32") -> list[tuple[str, str]]:
+    """Fetch a knockout round's matchups from football-data.org (canonical names).
+
+    Returns the (home, away) pairs as the API orders them, or [] if any match in the
+    round is not yet assigned both teams. This is a CROSS-CHECK convenience only: the
+    API does not encode the bracket tree, so the authoritative matchup order lives in
+    data/knockout_bracket.csv (see loader.load_knockout_bracket). Use this to verify the
+    committed file's matchup *set* — not to derive its ordering.
+
+    NOTE: query the stage explicitly (?stage=...); the unfiltered season endpoint
+    returns a stale payload mid-tournament with teams still unassigned.
+    """
+    key = _get_api_key()
+    url = f"{_API_BASE}/competitions/WC/matches?season={_WC_SEASON}&stage={stage}"
+    req = urllib.request.Request(url, headers={"X-Auth-Token": key})
+    with urllib.request.urlopen(req) as r:
+        data = json.loads(r.read())
+    pairs: list[tuple[str, str]] = []
+    for m in data.get("matches", []):
+        home = m["homeTeam"].get("name")
+        away = m["awayTeam"].get("name")
+        if not home or not away:
+            return []  # round not fully drawn yet
+        pairs.append((_canonical(home), _canonical(away)))
+    return pairs
 
 
 def patch_results_csv() -> int:

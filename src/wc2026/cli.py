@@ -255,14 +255,17 @@ def simulate(
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Run a full Monte Carlo tournament simulation."""
-    from wc2026.data.loader import load_wc2026_results
+    from wc2026.data.loader import load_knockout_bracket, load_wc2026_results
     from wc2026.simulate.tournament import run_monte_carlo
 
     model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
     actual = load_wc2026_results()
+    r32 = load_knockout_bracket()
 
     with _status(f"Running {simulations:,} simulations…", quiet):
-        sim = run_monte_carlo(groups, model, n=simulations, seed=seed, actual_results=actual)
+        sim = run_monte_carlo(
+            groups, model, n=simulations, seed=seed, actual_results=actual, r32_override=r32
+        )
 
     ranked = sim.sorted_by_win_prob()
 
@@ -431,20 +434,30 @@ def show_scenario(
         console.print("[red]--mode must be 'random', 'plausible', or 'modal'[/red]")
         raise typer.Exit(1)
 
-    from wc2026.data.loader import load_wc2026_results
+    from wc2026.data.loader import load_knockout_bracket, load_wc2026_results
 
     model, groups, _ = _load_and_train(half_life=half_life)
     actual = load_wc2026_results()
+    r32 = load_knockout_bracket()
 
     with console.status(f"Building {mode} scenario…"):
         if mode == "modal":
-            result = predict_modal_tournament(groups, model, actual_results=actual)
+            result = predict_modal_tournament(
+                groups, model, actual_results=actual, r32_override=r32
+            )
         elif mode == "plausible":
             result = simulate_nucleus_tournament(
-                groups, model, confidence=confidence, seed=seed, actual_results=actual
+                groups,
+                model,
+                confidence=confidence,
+                seed=seed,
+                actual_results=actual,
+                r32_override=r32,
             )
         else:
-            result = simulate_full_tournament(groups, model, seed=seed, actual_results=actual)
+            result = simulate_full_tournament(
+                groups, model, seed=seed, actual_results=actual, r32_override=r32
+            )
 
     with console.status("Generating HTML…"):
         html_content = generate_html(result, mode=mode)
@@ -693,6 +706,37 @@ def refresh_data(
     _ = load_or_compute_elo_history(force_refresh=True)
     console.print(f"  [green]✓[/green] cached at [bold]{ELO_CACHE_PATH}[/bold]")
 
+    # Cross-check the committed knockout bracket against the live draw (set only;
+    # the committed file's tree ordering stays authoritative — see knockout_bracket.csv).
+    console.print("Verifying knockout bracket…")
+    from wc2026.data.live import fetch_knockout_bracket
+    from wc2026.data.loader import load_knockout_bracket
+
+    try:
+        live_pairs = fetch_knockout_bracket("LAST_32")
+    except RuntimeError as e:
+        live_pairs = []
+        console.print(f"  [yellow]skipped:[/yellow] {e}")
+    committed = load_knockout_bracket() or []
+    if live_pairs and committed:
+        live_set = {frozenset(p) for p in live_pairs}
+        committed_set = {frozenset(p) for p in committed}
+        if live_set == committed_set:
+            console.print("  [green]✓[/green] committed R32 bracket matches the live draw")
+        else:
+            console.print(
+                "  [yellow]⚠ mismatch[/yellow] between data/knockout_bracket.csv and the live "
+                "draw — review and update the committed file (keep tree ordering)."
+            )
+            console.print(
+                f"    live-only: {sorted(tuple(sorted(p)) for p in live_set - committed_set)}"
+            )
+            console.print(
+                f"    file-only: {sorted(tuple(sorted(p)) for p in committed_set - live_set)}"
+            )
+    elif not live_pairs:
+        console.print("  [dim]live R32 not fully drawn yet; keeping committed bracket.[/dim]")
+
     console.print("\n[bold green]Done.[/bold green] Re-run any command to use updated data.")
 
 
@@ -723,7 +767,12 @@ def snapshot(
 
     import pandas as pd
 
-    from wc2026.data.loader import DATA_DIR, RESULTS_TO_CANONICAL, load_wc2026_results
+    from wc2026.data.loader import (
+        DATA_DIR,
+        RESULTS_TO_CANONICAL,
+        load_knockout_bracket,
+        load_wc2026_results,
+    )
     from wc2026.simulate.tournament import run_monte_carlo
 
     if no_backfill and backfill_only:
@@ -813,9 +862,13 @@ def snapshot(
     if not backfill_only:
         model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
         actual = load_wc2026_results()
+        # Once the group stage is over, fix the knockout draw to the real bracket.
+        r32 = load_knockout_bracket()
 
         with _status(f"Running {simulations:,} simulations…", quiet):
-            sim = run_monte_carlo(groups, model, n=simulations, seed=seed, actual_results=actual)
+            sim = run_monte_carlo(
+                groups, model, n=simulations, seed=seed, actual_results=actual, r32_override=r32
+            )
 
         ranked = sim.sorted_by_win_prob()
         today = datetime.date.today().isoformat()

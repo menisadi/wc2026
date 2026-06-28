@@ -174,10 +174,15 @@ def simulate_tournament(
     model: PoissonModel,
     rng: np.random.Generator,
     actual_results: ActualResults | None = None,
+    r32_override: list[tuple[str, str]] | None = None,
 ) -> tuple[str, dict[str, list[TeamRecord]]]:
-    """Simulate a full tournament. Returns (winner, group_standings)."""
+    """Simulate a full tournament. Returns (winner, group_standings).
+
+    `r32_override`, when given, replaces the approximate bracket built from simulated
+    standings with the real Round-of-32 draw (see loader.load_knockout_bracket).
+    """
     group_standings = simulate_group_stage(groups, model, rng, actual_results)
-    r32_pairs = build_knockout_bracket(group_standings)
+    r32_pairs = r32_override or build_knockout_bracket(group_standings)
     r16_teams = simulate_knockout_round(r32_pairs, model, rng)
     qf_teams = simulate_knockout_round(pairs_from_winners(r16_teams), model, rng)
     sf_teams = simulate_knockout_round(pairs_from_winners(qf_teams), model, rng)
@@ -236,7 +241,14 @@ def run_monte_carlo(
     n: int = 10_000,
     seed: int | None = None,
     actual_results: ActualResults | None = None,
+    r32_override: list[tuple[str, str]] | None = None,
 ) -> SimulationResults:
+    """Monte Carlo tournament simulation.
+
+    `r32_override`, when given, fixes the Round-of-32 matchups to the real draw instead
+    of building an approximate bracket from simulated standings — use it once the group
+    stage is over (see loader.load_knockout_bracket).
+    """
     rng = np.random.default_rng(seed)
     results = SimulationResults(n_simulations=n)
 
@@ -252,7 +264,7 @@ def run_monte_carlo(
                 )
 
         # Knockout
-        r32_pairs = build_knockout_bracket(group_standings)
+        r32_pairs = r32_override or build_knockout_bracket(group_standings)
         r32_teams = [t for pair in r32_pairs for t in pair]
         for t in r32_teams:
             results.r32_counts[t] = results.r32_counts.get(t, 0) + 1
@@ -312,14 +324,18 @@ def simulate_full_tournament(
     rng: np.random.Generator | None = None,
     seed: int | None = None,
     actual_results: ActualResults | None = None,
+    r32_override: list[tuple[str, str]] | None = None,
 ) -> FullTournamentResult:
-    """Run one complete tournament and capture every match result."""
+    """Run one complete tournament and capture every match result.
+
+    `r32_override`, when given, fixes the Round-of-32 matchups to the real draw.
+    """
     if rng is None:
         rng = np.random.default_rng(seed)
 
     group_standings = simulate_group_stage(groups, model, rng, actual_results)
     third_qualifiers = pick_best_third_place(group_standings)
-    r32_pairs = build_knockout_bracket(group_standings)
+    r32_pairs = r32_override or build_knockout_bracket(group_standings)
 
     r32_outcomes, r32_winners = _simulate_round_with_outcomes(r32_pairs, model, rng)
     r16_outcomes, r16_winners = _simulate_round_with_outcomes(
@@ -351,8 +367,12 @@ def predict_modal_tournament(
     groups: dict[str, list[str]],
     model: PoissonModel,
     actual_results: ActualResults | None = None,
+    r32_override: list[tuple[str, str]] | None = None,
 ) -> FullTournamentResult:
-    """Deterministic bracket: each match takes its single most probable outcome."""
+    """Deterministic bracket: each match takes its single most probable outcome.
+
+    `r32_override`, when given, fixes the Round-of-32 matchups to the real draw.
+    """
 
     # Modal group stage
     group_standings: dict[str, list[TeamRecord]] = {}
@@ -369,7 +389,7 @@ def predict_modal_tournament(
         group_standings[g] = sorted(records.values(), key=lambda r: r.sort_key(), reverse=True)
 
     third_qualifiers = pick_best_third_place(group_standings)
-    r32_pairs = build_knockout_bracket(group_standings)
+    r32_pairs = r32_override or build_knockout_bracket(group_standings)
 
     def modal_round(pairs: list[tuple[str, str]]) -> tuple[list[MatchOutcome], list[str]]:
         outcomes: list[MatchOutcome] = []
@@ -405,10 +425,12 @@ def simulate_nucleus_tournament(
     rng: np.random.Generator | None = None,
     seed: int | None = None,
     actual_results: ActualResults | None = None,
+    r32_override: list[tuple[str, str]] | None = None,
 ) -> FullTournamentResult:
     """Random bracket where each match samples from the top-P nucleus of its score distribution.
 
     Produces variety across runs while excluding freak low-probability scorelines.
+    `r32_override`, when given, fixes the Round-of-32 matchups to the real draw.
     """
     if rng is None:
         rng = np.random.default_rng(seed)
@@ -431,7 +453,7 @@ def simulate_nucleus_tournament(
         group_standings[g] = sorted(records.values(), key=lambda r: r.sort_key(), reverse=True)
 
     third_qualifiers = pick_best_third_place(group_standings)
-    r32_pairs = build_knockout_bracket(group_standings)
+    r32_pairs = r32_override or build_knockout_bracket(group_standings)
 
     def nucleus_round(
         pairs: list[tuple[str, str]],
