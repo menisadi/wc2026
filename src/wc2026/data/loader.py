@@ -117,6 +117,24 @@ def load_knockout_bracket() -> list[tuple[str, str]] | None:
     return pairs
 
 
+def load_knockout_fixtures() -> dict[int, tuple[str, str]]:
+    """Map official FIFA match number → (home, away) for the drawn knockout fixtures.
+
+    Lets `predict-match --game N` look up a knockout tie by its match number
+    (Round of 32 is 73–88). Only fixtures present in data/knockout_bracket.csv are
+    returned, so rounds that are not drawn yet are simply absent.
+    """
+    if not KNOCKOUT_BRACKET_PATH.exists():
+        return {}
+    df = pd.read_csv(KNOCKOUT_BRACKET_PATH, comment="#")
+    out: dict[int, tuple[str, str]] = {}
+    for _, row in df.iterrows():
+        home = _normalize(str(row["home"]), RESULTS_TO_CANONICAL)
+        away = _normalize(str(row["away"]), RESULTS_TO_CANONICAL)
+        out[int(row["r32_match"])] = (home, away)
+    return out
+
+
 def load_goalscorers(min_year: int = 2018) -> pd.DataFrame:
     df = pd.read_csv(DATA_DIR / "goalscorers.csv", parse_dates=["date"])
     df = df[df["date"].dt.year >= min_year].copy()

@@ -30,6 +30,14 @@ def test_simulate_csv_header() -> None:
     assert result.output.splitlines()[0] == "rank,team,win_pct,final_pct,semi_pct"
 
 
+def test_predict_match_rejects_undrawn_knockout_game() -> None:
+    # Match 99 (a later round) is not drawn yet -> clean error before training.
+    runner = CliRunner()
+    result = runner.invoke(app, ["predict-match", "--game", "99"])
+    assert result.exit_code == 1
+    assert "not a drawn knockout fixture" in result.output
+
+
 def test_simulate_csv_rows() -> None:
     runner = CliRunner()
     with (

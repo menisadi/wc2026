@@ -21,7 +21,10 @@ wc2026 predict-match <team_a> <team_b> [--sims 50000] [--half-life 3.0] [--ev]
 wc2026 predict-match --game <N>
 ```
 Head-to-head win/draw/loss probabilities, xG, and most likely scorelines.
-- `--game N` — look up both teams from the group-stage schedule (1-based)
+- `--game N` — look up both teams by match number: 1-72 = group stage (schedule order),
+  73-88 = Round of 32 (official match number, auto-selects `--stage r32`)
+- `--stage` — round used for EV scoring and (outside the group stage) 120-minute extra-time
+  results: `group | r32 | r16 | qf | sf | 3rd | final`
 - `--half-life` — recency decay in years (default 3.0)
 - `--ev` — rank scorelines by expected betting value instead of probability
 

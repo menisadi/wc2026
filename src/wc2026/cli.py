@@ -109,7 +109,10 @@ def predict_match(
         None,
         "--game",
         "-g",
-        help="Group-stage game number from the schedule (1-based); fetches both teams.",
+        help=(
+            "Match number; fetches both teams. 1-72 = group stage (schedule order); "
+            "73-88 = Round of 32 (official match number, auto-selects --stage r32)."
+        ),
     ),
     simulations: int = typer.Option(50_000, "--sims", help="Number of simulated matches"),
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
@@ -135,7 +138,11 @@ def predict_match(
     ),
 ) -> None:
     """Predict the outcome of a single match between TEAM_A and TEAM_B."""
-    from wc2026.data.loader import SCHEDULE_TO_CANONICAL, load_schedule
+    from wc2026.data.loader import (
+        SCHEDULE_TO_CANONICAL,
+        load_knockout_fixtures,
+        load_schedule,
+    )
 
     if stage not in _STAGE_POINTS:
         console.print(f"[red]--stage must be one of: {', '.join(_STAGE_POINTS)}[/red]")
@@ -148,12 +155,27 @@ def predict_match(
         raise typer.Exit(1)
 
     game_header = ""
-    if game is not None:
+    if game is not None and game > 72:
+        # Knockout fixture by official match number (Round of 32 = 73-88).
+        fixtures = load_knockout_fixtures()
+        if game not in fixtures:
+            drawn = sorted(fixtures)
+            avail = f"{drawn[0]}-{drawn[-1]}" if drawn else "none drawn yet"
+            console.print(
+                f"[red]--game {game} is not a drawn knockout fixture[/red] "
+                f"(available: {avail}). Later rounds resolve as they are played."
+            )
+            raise typer.Exit(1)
+        team_a, team_b = fixtures[game]
+        if stage == "group":  # auto-select unless the user set a stage explicitly
+            stage = "r32"
+        game_header = f"Match {game} (R32): "
+    elif game is not None:
         schedule = load_schedule()
         group_games = schedule[schedule["Round"] == "Group stage"].reset_index(drop=True)
         if not 1 <= game <= len(group_games):
             console.print(
-                f"[red]--game must be between 1 and {len(group_games)} (group stage).[/red]"
+                f"[red]--game must be 1-{len(group_games)} (group stage) or 73-88 (R32).[/red]"
             )
             raise typer.Exit(1)
         row = group_games.iloc[game - 1]

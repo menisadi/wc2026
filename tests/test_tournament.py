@@ -1,6 +1,6 @@
 from typing import cast
 
-from wc2026.data.loader import load_knockout_bracket
+from wc2026.data.loader import load_knockout_bracket, load_knockout_fixtures
 from wc2026.model.poisson import MatchResult, PoissonModel
 from wc2026.simulate.tournament import (
     TeamRecord,
@@ -72,6 +72,12 @@ def test_load_knockout_bracket_shape() -> None:
     # Canonical names (not "Cape Verde Islands" / API spellings).
     assert "Cape Verde" in teams
     assert "Bosnia and Herzegovina" in teams
+
+
+def test_load_knockout_fixtures_match_numbers() -> None:
+    fixtures = load_knockout_fixtures()
+    assert set(fixtures) == set(range(73, 89))  # official R32 match numbers
+    assert fixtures[86] == ("Argentina", "Cape Verde")  # canonical names, from the bracket
 
 
 class _HomeAlwaysWins:
