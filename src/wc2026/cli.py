@@ -184,23 +184,41 @@ def predict_match(
     ta = resolve(team_a)
     tb = resolve(team_b)
 
-    p_a, p_d, p_b = model.win_draw_loss_probs(ta, tb)
-    xg_a, xg_b = model.predict_xg(ta, tb)
-
-    console.print(f"\n{game_header}[bold]{ta}[/bold] vs [bold]{tb}[/bold]\n")
-    console.print(f"  xG: {xg_a:.2f} – {xg_b:.2f}")
-    console.print(f"  Win {ta}: [green]{p_a:.1%}[/green]")
-    console.print(f"  Draw:      [yellow]{p_d:.1%}[/yellow]")
-    console.print(f"  Win {tb}: [red]{p_b:.1%}[/red]")
-
     import numpy as np
+
+    # Knockout bets are scored on the 120-minute result (extra time, no penalties), so
+    # outside the group stage we sample that distribution and derive W/D/L from it.
+    is_knockout = stage != "group"
+    xg_a, xg_b = model.predict_xg(ta, tb)
 
     rng = np.random.default_rng(0)
     score_counts: dict[tuple[int, int], int] = {}
     for _ in range(simulations):
-        r = model.simulate_match(ta, tb, rng)
+        r = (
+            model.simulate_knockout_scoreline(ta, tb, rng)
+            if is_knockout
+            else model.simulate_match(ta, tb, rng)
+        )
         k = (r.goals_a, r.goals_b)
         score_counts[k] = score_counts.get(k, 0) + 1
+
+    if is_knockout:
+        wins_a = sum(c for (ga, gb), c in score_counts.items() if ga > gb)
+        draws = sum(c for (ga, gb), c in score_counts.items() if ga == gb)
+        p_a, p_d, p_b = (
+            wins_a / simulations,
+            draws / simulations,
+            (simulations - wins_a - draws) / simulations,
+        )
+    else:
+        p_a, p_d, p_b = model.win_draw_loss_probs(ta, tb)
+
+    regulation = " (after 120 min)" if is_knockout else ""
+    console.print(f"\n{game_header}[bold]{ta}[/bold] vs [bold]{tb}[/bold]\n")
+    console.print(f"  xG (90 min): {xg_a:.2f} – {xg_b:.2f}")
+    console.print(f"  Win {ta}{regulation}: [green]{p_a:.1%}[/green]")
+    console.print(f"  Draw{regulation}:      [yellow]{p_d:.1%}[/yellow]")
+    console.print(f"  Win {tb}{regulation}: [red]{p_b:.1%}[/red]")
 
     if ev:
         dir_pts, exact_pts = _STAGE_POINTS[stage]

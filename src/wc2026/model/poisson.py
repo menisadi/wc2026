@@ -19,6 +19,11 @@ from sklearn.linear_model import PoissonRegressor
 
 from wc2026.features.builder import TeamStrength, compute_recency_weights
 
+# Extra time is 30 minutes; goals scale with time, so the ET scoring rate is 30/90 of
+# regulation. Knockout bets are scored on the result after 120 minutes (penalties
+# excluded), so a match level at 90' plays ET and may still finish a draw.
+_ET_GOALS_FRACTION: float = 30.0 / 90.0
+
 
 @dataclass
 class MatchResult:
@@ -193,13 +198,9 @@ class PoissonModel:
 
         Default 0.0 → neutral venue (the WC regime). Pass 1.0 when team_a is the home side.
 
-        # TODO: add `is_knockout: bool = False` parameter and multiply both xg values by a
-        # scaling factor (~0.85) when True. Backtest shows knockout matches are underpredicted
-        # for draws by ~4pp vs group stage (32.5% actual vs 28.4% predicted at 90 min), likely
-        # due to tactical caution not captured by team strengths. Lower xG raises p_draw
-        # naturally and also shifts exact-score distribution toward 0-0/1-1, fixing EV ranking.
-        # Validate the factor across Euro/Copa/AFCON before committing; propagate the flag
-        # through simulate_match, win_draw_loss_probs, and the tournament simulator.
+        This returns the 90-minute regulation rate. Knockout bets are scored on the
+        120-minute result, so extra time is modelled separately in
+        ``simulate_knockout_scoreline`` rather than by rescaling xG here.
         """
         assert self._fitted
         atk_a, def_a = self._get_attack_defense(team_a)
@@ -229,13 +230,36 @@ class PoissonModel:
         g_b = int(rng.poisson(xg_b))
         return MatchResult(g_a, g_b)
 
-    def simulate_knockout_match(
+    def simulate_knockout_scoreline(
         self, team_a: str, team_b: str, rng: np.random.Generator | None = None
-    ) -> tuple[str, MatchResult]:
-        """Simulate until there's a winner (draws go to penalties, 50/50)."""
+    ) -> MatchResult:
+        """Sample the 120-minute betting result (regulation + extra time, no penalties).
+
+        Simulate 90 minutes; if level, add extra-time goals (Poisson at the reduced ET
+        rate). The returned score may still be a draw — that is the result bets are scored
+        on, with penalties deciding only who advances (see ``simulate_knockout_match``).
+        """
         if rng is None:
             rng = np.random.default_rng()
         result = self.simulate_match(team_a, team_b, rng)
+        if result.winner is not None:
+            return result
+        xg_a, xg_b = self.predict_xg(team_a, team_b)
+        et_a = int(rng.poisson(xg_a * _ET_GOALS_FRACTION))
+        et_b = int(rng.poisson(xg_b * _ET_GOALS_FRACTION))
+        return MatchResult(result.goals_a + et_a, result.goals_b + et_b)
+
+    def simulate_knockout_match(
+        self, team_a: str, team_b: str, rng: np.random.Generator | None = None
+    ) -> tuple[str, MatchResult]:
+        """Resolve a knockout tie: 120-minute scoreline, then penalties (50/50) if level.
+
+        The returned ``MatchResult`` is the 120-minute betting score; ``winner`` is who
+        advances (decided on penalties when the score is level after extra time).
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+        result = self.simulate_knockout_scoreline(team_a, team_b, rng)
         if result.winner is not None:
             winner = team_a if result.winner == "a" else team_b
         else:
