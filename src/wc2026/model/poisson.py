@@ -97,9 +97,12 @@ class PoissonModel:
         self._team_idx = {t: i for i, t in enumerate(self._teams)}
         n_teams = len(self._teams)
 
-        # TODO(after 2026-06-23, round 2 ends): try upweighting WC 2026 matches (×5–10).
-        # 2026-06-15: tried 2.5× on all major-tournament finals — slightly worse on every
-        # regime incl. --tournaments-only. compute_tournament_weights kept for future use.
+        # Upweighting recent tournament matches was tested and rejected — recency weighting
+        # already maxes out the weight on June-2026 games, and the per-team samples are tiny:
+        #   2026-06-15: 2.5× on all major-tournament finals — slightly worse on every regime.
+        #   2026-06-28: walk-forward over the 72 played WC 2026 group games — upweighting WC
+        #     2026 matches ×2/×5/×10 → log-loss 0.8387/0.8397/0.8431 vs 0.8389 at ×1 (no gain,
+        #     worse past ×2). compute_tournament_weights kept for future use.
         weights = compute_recency_weights(df["date"], half_life_years)
 
         # Build sparse design matrix: 2 rows per match
