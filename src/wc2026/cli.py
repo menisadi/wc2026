@@ -707,6 +707,107 @@ def backtest(
         console.print("[dim]Well-calibrated → mean pred ≈ mean obs in every bucket.[/dim]")
 
 
+@app.command("betting-backtest")
+def betting_backtest(
+    since: int = typer.Option(2026, "--since", help="First year to evaluate (inclusive)."),
+    half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years."),
+    predictors: str = typer.Option(
+        "elo-threshold,poisson+elo,dc+elo,outcome-first,best-ev",
+        "--predictors",
+        help="Comma-separated predictor names.",
+    ),
+    neutral_only: bool = typer.Option(
+        False, "--neutral-only", help="Only evaluate neutral-venue matches."
+    ),
+    tournaments_only: bool = typer.Option(
+        False, "--tournaments-only", help="Only evaluate major-tournament games."
+    ),
+    wc_only: bool = typer.Option(
+        False, "--wc-only", help="Only FIFA World Cup matches (equal N for all predictors)."
+    ),
+    csv: bool = typer.Option(False, "--csv", help="Output as CSV."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress progress messages."),
+) -> None:
+    """Score predictors with the 3/1/0 betting rule on their modal score predictions."""
+    from wc2026.data.elo import load_or_compute_elo_history
+    from wc2026.data.loader import load_results
+    from wc2026.evaluate.backtest import build_predictors, walk_forward
+    from wc2026.evaluate.metrics import betting_score
+
+    predictor_names = [n.strip() for n in predictors.split(",") if n.strip()]
+
+    with _status("Loading data…", quiet):
+        results = load_results(min_year=2000)
+        elo_history = load_or_compute_elo_history()
+
+    preds = build_predictors(predictor_names)
+
+    def progress(msg: str) -> None:
+        if not quiet:
+            err_console.log(msg)
+
+    bt = walk_forward(
+        results=results,
+        elo_history=elo_history,
+        predictors=preds,
+        since_year=since,
+        half_life=half_life,
+        neutral_only=neutral_only,
+        tournaments_only=tournaments_only,
+        progress=progress,
+    )
+
+    score_rows: list[tuple[str, int, int, int, int, int]] = []
+    for name in bt.predictor_names:
+        sub = bt.for_predictor(name)
+        if wc_only:
+            sub = sub[sub["tournament"] == "FIFA World Cup"]
+        sub = sub[sub["modal_h"] >= 0]
+        if sub.empty:
+            continue
+        pts_list = [
+            betting_score(
+                int(r["modal_h"]),
+                int(r["modal_a"]),
+                int(r["home_goals"]),
+                int(r["away_goals"]),
+            )
+            for _, r in sub.iterrows()
+        ]
+        total = sum(pts_list)
+        exact = sum(1 for p in pts_list if p == 3)
+        outcome_hits = sum(1 for p in pts_list if p == 1)
+        misses = sum(1 for p in pts_list if p == 0)
+        score_rows.append((name, total, exact, outcome_hits, misses, len(sub)))
+
+    score_rows.sort(key=lambda r: -r[1])
+
+    if csv:
+        print("predictor,pts,exact,outcome,misses,n")
+        for name, total, exact, outcome_hits, misses, n in score_rows:
+            print(f"{name},{total},{exact},{outcome_hits},{misses},{n}")
+        return
+
+    title = f"Betting-game backtest {since}–"
+    if wc_only:
+        title += " (FIFA World Cup only)"
+    elif tournaments_only:
+        title += " (tournaments only)"
+    elif neutral_only:
+        title += " (neutral only)"
+    table = Table(title=title, show_header=True)
+    table.add_column("Predictor", style="bold")
+    table.add_column("Pts", justify="right", style="green")
+    table.add_column("Exact ×3", justify="right")
+    table.add_column("Outcome ×1", justify="right")
+    table.add_column("Misses", justify="right")
+    table.add_column("N", justify="right", style="dim")
+    for name, total, exact, outcome_hits, misses, n in score_rows:
+        table.add_row(name, str(total), str(exact), str(outcome_hits), str(misses), str(n))
+    console.print(table)
+    console.print("[dim]3 pts = exact score · 1 pt = correct outcome · 0 = miss[/dim]")
+
+
 @app.command("refresh-data")
 def refresh_data(
     live: bool = typer.Option(

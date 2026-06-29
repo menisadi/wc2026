@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 import numpy as np
@@ -837,6 +838,7 @@ def walk_forward(
                         "home_team": m["home_team"],
                         "away_team": m["away_team"],
                         "neutral": bool(m["neutral"]),
+                        "tournament": str(m.get("tournament", "")),
                         "p_home": float(probs[i, 0]),
                         "p_draw": float(probs[i, 1]),
                         "p_away": float(probs[i, 2]),
@@ -854,6 +856,203 @@ def walk_forward(
     return BacktestResult(predictions=pd.DataFrame(rows))
 
 
+class EloThresholdPredictor:
+    """Deterministic ELO-threshold predictor (betting-backtest only).
+
+    Uses the fixed 2026-05-27 ELO snapshot. predict_proba returns uniform 1/3 —
+    do not include in the probabilistic backtest.
+    """
+
+    name = "elo-threshold"
+    _SNAPSHOT = "2026-05-27"
+    _THRESHOLD = 250
+    _DATA_RAW = Path(__file__).parents[3] / "data" / "raw"
+
+    def __init__(self) -> None:
+        self._ratings: dict[str, float] | None = None
+
+    # ELO snapshot name → canonical name used in results.csv
+    _ELO_TO_CANONICAL: dict[str, str] = {
+        "Czechia": "Czech Republic",
+        "Cape Verde Islands": "Cape Verde",
+    }
+
+    def _load(self) -> None:
+        df = pd.read_csv(self._DATA_RAW / "elo_ratings_wc2026.csv")
+        snap = df[df["snapshot_date"] == self._SNAPSHOT]
+        self._ratings = {
+            self._ELO_TO_CANONICAL.get(c, c): r for c, r in zip(snap["country"], snap["rating"])
+        }
+
+    def _resolve(self, name: str) -> str | None:
+        ratings = cast(dict[str, float], self._ratings)
+        if name in ratings:
+            return name
+        lower = name.lower()
+        exact = [t for t in ratings if t.lower() == lower]
+        if exact:
+            return exact[0]
+        close = [t for t in ratings if lower in t.lower() or t.lower() in lower]
+        return close[0] if close else None
+
+    def _predict_one(self, home: str, away: str) -> tuple[int, int]:
+        ratings = cast(dict[str, float], self._ratings)
+        diff = ratings[home] - ratings[away]
+        if diff >= self._THRESHOLD:
+            return 2, 0
+        if diff >= 0:
+            return 1, 0
+        if abs(diff) >= self._THRESHOLD:
+            return 0, 2
+        return 0, 1
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        if self._ratings is None:
+            self._load()
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.full((len(matches), 3), 1.0 / 3.0)
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray | None:
+        if self._ratings is None:
+            self._load()
+        scores = []
+        for _, row in matches.iterrows():
+            home = self._resolve(str(row["home_team"]))
+            away = self._resolve(str(row["away_team"]))
+            if home is None or away is None:
+                scores.append((-1, -1))
+            else:
+                scores.append(self._predict_one(home, away))
+        return np.array(scores, dtype=int)
+
+
+def _modal_in_class(xg_h: float, xg_a: float, outcome: int, max_goals: int = 10) -> tuple[int, int]:
+    """Return the highest-probability score (h, a) that belongs to *outcome*.
+
+    outcome: 0 = home win, 1 = draw, 2 = away win.
+    Searches an (max_goals+1) × (max_goals+1) grid and returns the cell with
+    the highest joint Poisson probability subject to the outcome constraint.
+    Falls back to (1,0)/(0,0)/(0,1) when the grid is empty (shouldn't happen).
+    """
+    best_p = -1.0
+    best: tuple[int, int] = (1, 0) if outcome == 0 else (0, 0) if outcome == 1 else (0, 1)
+    for h in range(max_goals + 1):
+        ph = float(scipy_poisson.pmf(h, xg_h))
+        for a in range(max_goals + 1):
+            cell_outcome = 0 if h > a else (1 if h == a else 2)
+            if cell_outcome != outcome:
+                continue
+            p = ph * float(scipy_poisson.pmf(a, xg_a))
+            if p > best_p:
+                best_p = p
+                best = (h, a)
+    return best
+
+
+class OutcomeFirstPredictor:
+    """Pick the most-likely outcome class, then the modal score within that class.
+
+    Wraps PoissonPredictor(use_elo=True). predict_proba / predict_xg delegate
+    unchanged; only predict_modal_score differs from the base model.
+    """
+
+    name = "outcome-first"
+
+    def __init__(self) -> None:
+        self._base = PoissonPredictor(use_elo=True)
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        self._base.fit(training, elo_history, half_life, year_cutoff)
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        return self._base.predict_proba(matches)
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return self._base.predict_xg(matches)
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return self._base.predict_score_ll(matches)
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        probas = self._base.predict_proba(matches)
+        xgs = self._base.predict_xg(matches)
+        scores = []
+        for i in range(len(matches)):
+            best_outcome = int(np.argmax(probas[i]))
+            xg_h, xg_a = float(xgs[i, 0]), float(xgs[i, 1])
+            scores.append(_modal_in_class(xg_h, xg_a, best_outcome))
+        return np.array(scores, dtype=int)
+
+
+class BestEvPredictor:
+    """Pick the score that maximises EV = 2·P(exact score) + P(outcome class).
+
+    For each of the 3 outcome classes, finds its modal score (highest P within
+    that class), computes its EV, and returns the score with the highest EV.
+    Wraps PoissonPredictor(use_elo=True).
+    """
+
+    name = "best-ev"
+
+    def __init__(self) -> None:
+        self._base = PoissonPredictor(use_elo=True)
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        self._base.fit(training, elo_history, half_life, year_cutoff)
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        return self._base.predict_proba(matches)
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return self._base.predict_xg(matches)
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return self._base.predict_score_ll(matches)
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        probas = self._base.predict_proba(matches)
+        xgs = self._base.predict_xg(matches)
+        scores = []
+        for i in range(len(matches)):
+            xg_h, xg_a = float(xgs[i, 0]), float(xgs[i, 1])
+            best_ev = -1.0
+            best: tuple[int, int] = (1, 0)
+            for outcome in range(3):
+                h, a = _modal_in_class(xg_h, xg_a, outcome)
+                p_exact = float(scipy_poisson.pmf(h, xg_h)) * float(scipy_poisson.pmf(a, xg_a))
+                ev = 2.0 * p_exact + float(probas[i, outcome])
+                if ev > best_ev:
+                    best_ev = ev
+                    best = (h, a)
+            scores.append(best)
+        return np.array(scores, dtype=int)
+
+
 def build_predictors(names: list[str]) -> list[Predictor]:
     """Map CLI names → predictor instances. Unknown names raise ValueError."""
     registry: dict[str, Predictor] = {
@@ -866,6 +1065,9 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "dc+elo": DixonColesPredictor(),
         "supremacy+totals": SupremacyTotalsPredictor(),
         "skellam": SkellamPredictor(),
+        "elo-threshold": EloThresholdPredictor(),
+        "outcome-first": OutcomeFirstPredictor(),
+        "best-ev": BestEvPredictor(),
     }
     out: list[Predictor] = []
     for n in names:

@@ -109,6 +109,15 @@ def modal_accuracy(
     return float(((modal_h == actual_home) & (modal_a == actual_away)).mean())
 
 
+def betting_score(modal_h: int, modal_a: int, actual_h: int, actual_a: int) -> int:
+    """3 pts for exact score, 1 pt for correct outcome, 0 otherwise."""
+    if modal_h == actual_h and modal_a == actual_a:
+        return 3
+    modal_outcome = 0 if modal_h > modal_a else (1 if modal_h == modal_a else 2)
+    actual_outcome = 0 if actual_h > actual_a else (1 if actual_h == actual_a else 2)
+    return 1 if modal_outcome == actual_outcome else 0
+
+
 def calibration_buckets(
     probs: np.ndarray, outcomes: np.ndarray, n_bins: int = 10
 ) -> list[dict[str, float]]:
