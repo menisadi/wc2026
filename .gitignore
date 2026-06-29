@@ -18,3 +18,4 @@ data/elo_history_computed.csv
 *.html
 # but keep the model documentation pages
 !docs/*.html
+/.vibemark.json
