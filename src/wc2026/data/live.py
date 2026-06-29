@@ -82,10 +82,45 @@ def fetch_knockout_bracket(stage: str = "LAST_32") -> list[tuple[str, str]]:
     return pairs
 
 
+def _drop_phantoms(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove NaN-score rows where a real-score row exists for the same team pair within 2 days.
+
+    Normalizes team names via RESULTS_TO_CANONICAL before comparison so that name
+    variants (e.g. 'Cape Verde Islands' vs 'Cape Verde') are treated as the same team.
+    """
+
+    def _norm(name: str) -> str:
+        return RESULTS_TO_CANONICAL.get(name, name)
+
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    has_score = df["home_score"].notna() & df["away_score"].notna()
+    # Pair key: sort normalized names so home/away order doesn't matter
+    h_norm = df["home_team"].map(_norm)
+    a_norm = df["away_team"].map(_norm)
+    df["_h"] = pd.concat([h_norm, a_norm], axis=1).min(axis=1)
+    df["_a"] = pd.concat([h_norm, a_norm], axis=1).max(axis=1)
+
+    to_drop: list[int] = []
+    for idx in df.index[~has_score].tolist():
+        h_min, a_max = df.at[idx, "_h"], df.at[idx, "_a"]
+        d = dates.loc[idx]
+        close = (dates - d).abs() <= pd.Timedelta(days=2)
+        same_pair = (df["_h"] == h_min) & (df["_a"] == a_max)
+        if (same_pair & close & has_score).any():
+            to_drop.append(idx)
+
+    return df.drop(index=to_drop).drop(columns=["_h", "_a"]).reset_index(drop=True)
+
+
 def patch_results_csv() -> int:
     """
     Fetch finished WC 2026 matches and fill their scores into results.csv.
     Returns the number of rows updated.
+
+    Matching strategy: exact (date + home + away) first; if not found, try ±1 day
+    with either team order so that schedule-date discrepancies and home/away swaps
+    don't create duplicate phantom rows. After updating, phantom NaN-score rows whose
+    team pair has a real result nearby are removed.
     """
     matches = fetch_finished_matches()
     if not matches:
@@ -93,36 +128,53 @@ def patch_results_csv() -> int:
 
     results_path = DATA_DIR / "results.csv"
     df = pd.read_csv(results_path)
-    date_strs = df["date"].astype(str).str[:10]
+    dates = pd.to_datetime(df["date"], errors="coerce")
 
     updated = 0
     for m in matches:
-        date = m["utcDate"][:10]
+        api_date = pd.Timestamp(m["utcDate"][:10])
         home = _canonical(m["homeTeam"]["name"])
         away = _canonical(m["awayTeam"]["name"])
         score = m["score"]["fullTime"]
-        home_score, away_score = score["home"], score["away"]
+        h_score, a_score = score["home"], score["away"]
 
-        mask = (date_strs == date) & (df["home_team"] == home) & (df["away_team"] == away)
+        # Pass 1: exact match
+        mask = (dates == api_date) & (df["home_team"] == home) & (df["away_team"] == away)
+        swapped = False
+
+        if not mask.any():
+            # Pass 2: ±1 day, same order
+            date_ok = (dates - api_date).abs() <= pd.Timedelta(days=1)
+            mask = date_ok & (df["home_team"] == home) & (df["away_team"] == away)
+
+        if not mask.any():
+            # Pass 3: ±1 day, swapped home/away
+            date_ok = (dates - api_date).abs() <= pd.Timedelta(days=1)
+            mask = date_ok & (df["home_team"] == away) & (df["away_team"] == home)
+            swapped = mask.any()
+
         if mask.any():
-            df.loc[mask, "home_score"] = home_score
-            df.loc[mask, "away_score"] = away_score
+            # Flip scores when the existing row's home/away order is the reverse of the API's
+            row_h = a_score if swapped else h_score
+            row_a = h_score if swapped else a_score
+            df.loc[mask, "home_score"] = row_h
+            df.loc[mask, "away_score"] = row_a
             updated += mask.sum()
         else:
-            # Game not in results.csv yet — append it
             new_row = {
-                "date": date,
+                "date": m["utcDate"][:10],
                 "home_team": home,
                 "away_team": away,
-                "home_score": home_score,
-                "away_score": away_score,
+                "home_score": h_score,
+                "away_score": a_score,
                 "tournament": "FIFA World Cup",
                 "city": "",
                 "country": "",
-                "neutral": False,
+                "neutral": True,
             }
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             updated += 1
 
+    df = _drop_phantoms(df)
     df.to_csv(results_path, index=False)
     return updated
