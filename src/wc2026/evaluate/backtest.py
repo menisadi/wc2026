@@ -1026,7 +1026,7 @@ class EloThresholdWalkPredictor:
     year < year_cutoff) instead of the fixed 2026-05-27 file snapshot.
     """
 
-    name = "elo-threshold-walk"
+    name = "elo-threshold-live"
     _THRESHOLD: int = 250
 
     def __init__(self) -> None:
@@ -1216,7 +1216,7 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "supremacy+totals": SupremacyTotalsPredictor(),
         "skellam": SkellamPredictor(),
         "elo-threshold": EloThresholdPredictor(),
-        "elo-threshold-walk": EloThresholdWalkPredictor(),
+        "elo-threshold-live": EloThresholdWalkPredictor(),
         "uniform-goals": UniformGoalsPredictor(),
         "poisson-sample": PoissonDrawPredictor(),
         "poisson-outcome-first": OutcomeFirstPredictor(),
