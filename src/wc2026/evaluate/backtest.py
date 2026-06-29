@@ -939,6 +939,156 @@ class EloThresholdPredictor:
         return np.array(scores, dtype=int)
 
 
+class UniformGoalsPredictor:
+    """Random baseline: sample home and away goals independently from Uniform{0,…,5}.
+
+    predict_proba returns the exact symmetric WDL implied by that distribution
+    (P(win)=P(loss)=15/36, P(draw)=6/36).  RNG is seeded at construction so
+    results are reproducible across re-runs.
+    """
+
+    name = "uniform-goals"
+
+    def __init__(self) -> None:
+        self._rng = np.random.default_rng(42)
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        pass
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        # 36 equally-likely (h,a) pairs; 15 have h>a, 6 have h==a, 15 have h<a
+        return np.tile([15.0 / 36, 6.0 / 36, 15.0 / 36], (len(matches), 1))
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        n = len(matches)
+        h = self._rng.integers(0, 6, size=n)  # uniform over {0,1,2,3,4,5}
+        a = self._rng.integers(0, 6, size=n)
+        return np.stack([h, a], axis=1)
+
+
+class PoissonDrawPredictor:
+    """Random baseline: sample home and away goals independently from Poisson(1.3).
+
+    Unlike RandomPoissonPredictor (which returns floor(λ) deterministically),
+    this actually draws from the distribution, so each run produces different
+    modal scores.  RNG is seeded at construction for reproducibility.
+    """
+
+    name = "poisson-sample"
+    _LAM: float = 1.3
+
+    def __init__(self) -> None:
+        self._rng = np.random.default_rng(42)
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        pass
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        ph, pd_, pa = _wdl_from_xg(self._LAM, self._LAM)
+        return np.tile([ph, pd_, pa], (len(matches), 1))
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.full((len(matches), 2), self._LAM)
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        n = len(matches)
+        h = self._rng.poisson(self._LAM, size=n)
+        a = self._rng.poisson(self._LAM, size=n)
+        return np.stack([h, a], axis=1)
+
+
+class EloThresholdWalkPredictor:
+    """ELO-threshold predictor using walk-forward ELO history.
+
+    Same 250-point threshold rule as EloThresholdPredictor, but reads ratings
+    from the walk-forward elo_history parameter (latest snapshot per team with
+    year < year_cutoff) instead of the fixed 2026-05-27 file snapshot.
+    """
+
+    name = "elo-threshold-walk"
+    _THRESHOLD: int = 250
+
+    def __init__(self) -> None:
+        self._ratings: dict[str, float] = {}
+        self._fallback: float = 1500.0
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        if elo_history is None or elo_history.empty:
+            return
+        past = elo_history[elo_history["year"] < year_cutoff]
+        if past.empty:
+            return
+        latest = past.sort_values("year").drop_duplicates("country", keep="last")
+        self._ratings = {str(c): float(r) for c, r in zip(latest["country"], latest["rating"])}
+        self._fallback = float(np.median(list(self._ratings.values())))
+
+    def _resolve(self, name: str) -> str:
+        if name in self._ratings:
+            return name
+        lower = name.lower()
+        exact = [t for t in self._ratings if t.lower() == lower]
+        if exact:
+            return exact[0]
+        close = [t for t in self._ratings if lower in t.lower() or t.lower() in lower]
+        return close[0] if close else name
+
+    def _predict_one(self, home: str, away: str) -> tuple[int, int]:
+        h_rating = self._ratings.get(home, self._fallback)
+        a_rating = self._ratings.get(away, self._fallback)
+        diff = h_rating - a_rating
+        if diff >= self._THRESHOLD:
+            return 2, 0
+        if diff >= 0:
+            return 1, 0
+        if abs(diff) >= self._THRESHOLD:
+            return 0, 2
+        return 0, 1
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.full((len(matches), 3), 1.0 / 3.0)
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        scores = []
+        for _, row in matches.iterrows():
+            home = self._resolve(str(row["home_team"]))
+            away = self._resolve(str(row["away_team"]))
+            scores.append(self._predict_one(home, away))
+        return np.array(scores, dtype=int)
+
+
 def _modal_in_class(xg_h: float, xg_a: float, outcome: int, max_goals: int = 10) -> tuple[int, int]:
     """Return the highest-probability score (h, a) that belongs to *outcome*.
 
@@ -969,7 +1119,7 @@ class OutcomeFirstPredictor:
     unchanged; only predict_modal_score differs from the base model.
     """
 
-    name = "outcome-first"
+    name = "poisson-outcome-first"
 
     def __init__(self) -> None:
         self._base = PoissonPredictor(use_elo=True)
@@ -1011,7 +1161,7 @@ class BestEvPredictor:
     Wraps PoissonPredictor(use_elo=True).
     """
 
-    name = "best-ev"
+    name = "poisson-best-ev"
 
     def __init__(self) -> None:
         self._base = PoissonPredictor(use_elo=True)
@@ -1066,8 +1216,11 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "supremacy+totals": SupremacyTotalsPredictor(),
         "skellam": SkellamPredictor(),
         "elo-threshold": EloThresholdPredictor(),
-        "outcome-first": OutcomeFirstPredictor(),
-        "best-ev": BestEvPredictor(),
+        "elo-threshold-walk": EloThresholdWalkPredictor(),
+        "uniform-goals": UniformGoalsPredictor(),
+        "poisson-sample": PoissonDrawPredictor(),
+        "poisson-outcome-first": OutcomeFirstPredictor(),
+        "poisson-best-ev": BestEvPredictor(),
     }
     out: list[Predictor] = []
     for n in names:
