@@ -765,20 +765,18 @@ def betting_backtest(
         sub = sub[sub["modal_h"] >= 0]
         if sub.empty:
             continue
-        pts_list = [
-            betting_score(
-                int(r["modal_h"]),
-                int(r["modal_a"]),
-                int(r["home_goals"]),
-                int(r["away_goals"]),
-                *_STAGE_POINTS.get(str(r.get("round", "")), _STAGE_POINTS["group"]),
-            )
-            for _, r in sub.iterrows()
-        ]
-        total = sum(pts_list)
-        exact = sum(1 for p in pts_list if p == 3)
-        outcome_hits = sum(1 for p in pts_list if p == 1)
-        misses = sum(1 for p in pts_list if p == 0)
+        total = exact = outcome_hits = misses = 0
+        for _, r in sub.iterrows():
+            mh, ma = int(r["modal_h"]), int(r["modal_a"])
+            ah, aa = int(r["home_goals"]), int(r["away_goals"])
+            dir_pts, exact_pts = _STAGE_POINTS.get(str(r.get("round", "")), _STAGE_POINTS["group"])
+            total += betting_score(mh, ma, ah, aa, dir_pts, exact_pts)
+            if mh == ah and ma == aa:
+                exact += 1
+            elif (mh > ma) == (ah > aa) and (mh == ma) == (ah == aa):
+                outcome_hits += 1
+            else:
+                misses += 1
         score_rows.append((name, total, exact, outcome_hits, misses, len(sub)))
 
     score_rows.sort(key=lambda r: -r[1])
@@ -799,14 +797,14 @@ def betting_backtest(
     table = Table(title=title, show_header=True)
     table.add_column("Predictor", style="bold")
     table.add_column("Pts", justify="right", style="green")
-    table.add_column("Exact ×3", justify="right")
-    table.add_column("Outcome ×1", justify="right")
+    table.add_column("Exact", justify="right")
+    table.add_column("Outcome", justify="right")
     table.add_column("Misses", justify="right")
     table.add_column("N", justify="right", style="dim")
     for name, total, exact, outcome_hits, misses, n in score_rows:
         table.add_row(name, str(total), str(exact), str(outcome_hits), str(misses), str(n))
     console.print(table)
-    console.print("[dim]3 pts = exact score · 1 pt = correct outcome · 0 = miss[/dim]")
+    console.print("[dim]Pts = stage-weighted total · exact/outcome/misses = raw counts[/dim]")
 
 
 @app.command("refresh-data")
