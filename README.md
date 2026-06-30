@@ -55,10 +55,24 @@ wc2026 backtest [--since 2024] [--half-life 3.0] [--baselines uniform,home-win,e
 Walk-forward backtest: train on past data, predict each year, score W/D/L log-loss vs baselines.
 
 ```bash
+wc2026 betting-backtest [--since 2026] [--half-life 3.0] [--predictors ...] [--neutral-only] [--tournaments-only] [--wc-only] [--csv] [--quiet]
+```
+Score predictors with the 3/1/0 betting rule (3 pts exact score, 1 pt correct outcome, 0 miss) on their modal score predictions.
+- `--predictors` — comma-separated list; default includes 8: `uniform-goals`, `poisson-sample`, `elo-threshold`, `elo-threshold-live`, `poisson+elo`, `dc+elo`, `poisson-outcome-first`, `poisson-best-ev`
+- `--wc-only` — restrict to FIFA World Cup matches for equal N across all predictors
+
+```bash
 wc2026 refresh-data
 ```
 Re-download all Kaggle datasets, patch in live WC 2026 results, and cross-check the
 committed knockout bracket against the live draw.
+
+## Scripts
+
+```bash
+uv run python elo_comparison.py [--country Israel] [--compare <country>] [--min-year 1940] [--output plot.png] [--csv] [--quiet]
+```
+Plot a team's historical Elo trajectory versus the global median and WC-participant quantiles, with an optional second country overlay.
 
 ## Knockout bracket
 
