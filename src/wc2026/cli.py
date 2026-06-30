@@ -712,7 +712,7 @@ def betting_backtest(
     since: int = typer.Option(2026, "--since", help="First year to evaluate (inclusive)."),
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years."),
     predictors: str = typer.Option(
-        "uniform-goals,poisson-sample,elo-threshold,elo-threshold-live,poisson+elo,dc+elo,poisson-outcome-first,poisson-best-ev",
+        "uniform-goals,poisson-sample,elo-threshold,elo-threshold-live,poisson+elo,poisson-best-ev",
         "--predictors",
         help="Comma-separated predictor names.",
     ),
