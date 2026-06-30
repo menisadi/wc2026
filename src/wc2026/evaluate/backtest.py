@@ -824,35 +824,79 @@ def walk_forward(
             if progress is not None:
                 progress(f"{p.name}: fit < {y}, predict {y} ({len(test)} matches)")
             p.fit(train, elo_history, half_life, y)
-            probs = p.predict_proba(test)
-            xgs = p.predict_xg(test)
-            score_lls = p.predict_score_ll(test)
-            modal_scores = p.predict_modal_score(test)
 
-            for i, (_, m) in enumerate(test.iterrows()):
-                rows.append(
-                    {
-                        "predictor": p.name,
-                        "year": y,
-                        "date": m["date"],
-                        "home_team": m["home_team"],
-                        "away_team": m["away_team"],
-                        "neutral": bool(m["neutral"]),
-                        "tournament": str(m.get("tournament", "")),
-                        "round": str(m.get("round", "")),
-                        "p_home": float(probs[i, 0]),
-                        "p_draw": float(probs[i, 1]),
-                        "p_away": float(probs[i, 2]),
-                        "outcome": int(outcomes[i]),
-                        "home_goals": int(m["home_score"]),
-                        "away_goals": int(m["away_score"]),
-                        "xg_home": float(xgs[i, 0]) if xgs is not None else float("nan"),
-                        "xg_away": float(xgs[i, 1]) if xgs is not None else float("nan"),
-                        "score_ll": float(score_lls[i]) if score_lls is not None else float("nan"),
-                        "modal_h": int(modal_scores[i, 0]) if modal_scores is not None else -1,
-                        "modal_a": int(modal_scores[i, 1]) if modal_scores is not None else -1,
-                    }
-                )
+            if getattr(p, "is_sequential", False):
+                test_seq = test.sort_values("date").reset_index(drop=True)
+                for i, (_, m) in enumerate(test_seq.iterrows()):
+                    row_df = test_seq.iloc[[i]]
+                    probs_i = p.predict_proba(row_df)
+                    xgs_i = p.predict_xg(row_df)
+                    score_lls_i = p.predict_score_ll(row_df)
+                    modal_scores_i = p.predict_modal_score(row_df)
+                    rows.append(
+                        {
+                            "predictor": p.name,
+                            "year": y,
+                            "date": m["date"],
+                            "home_team": m["home_team"],
+                            "away_team": m["away_team"],
+                            "neutral": bool(m["neutral"]),
+                            "tournament": str(m.get("tournament", "")),
+                            "round": str(m.get("round", "")),
+                            "p_home": float(probs_i[0, 0]),
+                            "p_draw": float(probs_i[0, 1]),
+                            "p_away": float(probs_i[0, 2]),
+                            "outcome": outcome_from_score(
+                                int(m["home_score"]), int(m["away_score"])
+                            ),
+                            "home_goals": int(m["home_score"]),
+                            "away_goals": int(m["away_score"]),
+                            "xg_home": float(xgs_i[0, 0]) if xgs_i is not None else float("nan"),
+                            "xg_away": float(xgs_i[0, 1]) if xgs_i is not None else float("nan"),
+                            "score_ll": float(score_lls_i[0])
+                            if score_lls_i is not None
+                            else float("nan"),
+                            "modal_h": int(modal_scores_i[0, 0])
+                            if modal_scores_i is not None
+                            else -1,
+                            "modal_a": int(modal_scores_i[0, 1])
+                            if modal_scores_i is not None
+                            else -1,
+                        }
+                    )
+                    getattr(p, "update")(m)
+            else:
+                probs = p.predict_proba(test)
+                xgs = p.predict_xg(test)
+                score_lls = p.predict_score_ll(test)
+                modal_scores = p.predict_modal_score(test)
+
+                for i, (_, m) in enumerate(test.iterrows()):
+                    rows.append(
+                        {
+                            "predictor": p.name,
+                            "year": y,
+                            "date": m["date"],
+                            "home_team": m["home_team"],
+                            "away_team": m["away_team"],
+                            "neutral": bool(m["neutral"]),
+                            "tournament": str(m.get("tournament", "")),
+                            "round": str(m.get("round", "")),
+                            "p_home": float(probs[i, 0]),
+                            "p_draw": float(probs[i, 1]),
+                            "p_away": float(probs[i, 2]),
+                            "outcome": int(outcomes[i]),
+                            "home_goals": int(m["home_score"]),
+                            "away_goals": int(m["away_score"]),
+                            "xg_home": float(xgs[i, 0]) if xgs is not None else float("nan"),
+                            "xg_away": float(xgs[i, 1]) if xgs is not None else float("nan"),
+                            "score_ll": float(score_lls[i])
+                            if score_lls is not None
+                            else float("nan"),
+                            "modal_h": int(modal_scores[i, 0]) if modal_scores is not None else -1,
+                            "modal_a": int(modal_scores[i, 1]) if modal_scores is not None else -1,
+                        }
+                    )
 
     return BacktestResult(predictions=pd.DataFrame(rows))
 
@@ -1020,15 +1064,25 @@ class PoissonDrawPredictor:
 
 
 class EloThresholdWalkPredictor:
-    """ELO-threshold predictor using walk-forward ELO history.
+    """ELO-threshold predictor: starts from the 2026-05-27 pre-WC snapshot and
+    updates ratings sequentially after each match is observed.
 
-    Same 250-point threshold rule as EloThresholdPredictor, but reads ratings
-    from the walk-forward elo_history parameter (latest snapshot per team with
-    year < year_cutoff) instead of the fixed 2026-05-27 file snapshot.
+    Same 250-point threshold rule as EloThresholdPredictor.  For year_cutoff
+    == 2026, fit() loads the external pre-WC snapshot so the starting ratings
+    are as current as possible; for all other years it falls back to the
+    computed elo_history.  is_sequential=True tells walk_forward to process
+    matches one at a time and call update() between predictions.
     """
 
     name = "elo-threshold-live"
+    is_sequential: bool = True
     _THRESHOLD: int = 250
+    _SNAPSHOT = "2026-05-27"
+    _DATA_RAW = Path(__file__).parents[3] / "data" / "raw"
+    _ELO_TO_CANONICAL: dict[str, str] = {
+        "Czechia": "Czech Republic",
+        "Cape Verde Islands": "Cape Verde",
+    }
 
     def __init__(self) -> None:
         self._ratings: dict[str, float] = {}
@@ -1041,6 +1095,18 @@ class EloThresholdWalkPredictor:
         half_life: float,
         year_cutoff: int,
     ) -> None:
+        if year_cutoff == 2026:
+            snap_path = self._DATA_RAW / "elo_ratings_wc2026.csv"
+            if snap_path.exists():
+                df = pd.read_csv(snap_path)
+                snap = df[df["snapshot_date"] == self._SNAPSHOT]
+                if not snap.empty:
+                    self._ratings = {
+                        self._ELO_TO_CANONICAL.get(str(c), str(c)): float(r)
+                        for c, r in zip(snap["country"], snap["rating"])
+                    }
+                    self._fallback = float(np.median(list(self._ratings.values())))
+                    return
         if elo_history is None or elo_history.empty:
             return
         past = elo_history[elo_history["year"] < year_cutoff]
@@ -1088,6 +1154,26 @@ class EloThresholdWalkPredictor:
             away = self._resolve(str(row["away_team"]))
             scores.append(self._predict_one(home, away))
         return np.array(scores, dtype=int)
+
+    def update(self, match_row: pd.Series) -> None:
+        from wc2026.data.elo import HOME_ADVANTAGE, _goal_diff_multiplier, k_value
+
+        home = self._resolve(str(match_row["home_team"]))
+        away = self._resolve(str(match_row["away_team"]))
+        gh = int(match_row["home_score"])
+        ga = int(match_row["away_score"])
+        neutral = bool(match_row["neutral"])
+        tournament = str(match_row.get("tournament", ""))
+
+        rh = self._ratings.get(home, self._fallback)
+        ra = self._ratings.get(away, self._fallback)
+        home_adv = 0.0 if neutral else HOME_ADVANTAGE
+        dr = (rh + home_adv) - ra
+        we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
+        w_h = 1.0 if gh > ga else (0.5 if gh == ga else 0.0)
+        delta = k_value(tournament) * _goal_diff_multiplier(gh - ga) * (w_h - we_h)
+        self._ratings[home] = rh + delta
+        self._ratings[away] = ra - delta
 
 
 def _modal_in_class(xg_h: float, xg_a: float, outcome: int, max_goals: int = 10) -> tuple[int, int]:

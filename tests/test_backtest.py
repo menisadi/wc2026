@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Callable
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -24,7 +22,6 @@ from wc2026.evaluate.backtest import (
     walk_forward,
 )
 from wc2026.evaluate.metrics import betting_score
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -111,9 +108,9 @@ def test_dc_tau_low_scores() -> None:
     rho = 0.1
     tau = _dc_tau_vec(x, y, lam, mu, rho)
     assert tau[0] == pytest.approx(1.0 - 1.5 * 1.0 * rho)  # (0,0)
-    assert tau[1] == pytest.approx(1.0 + 1.0 * rho)         # (1,0)
-    assert tau[2] == pytest.approx(1.0 + 1.5 * rho)         # (0,1)
-    assert tau[3] == pytest.approx(1.0 - rho)               # (1,1)
+    assert tau[1] == pytest.approx(1.0 + 1.0 * rho)  # (1,0)
+    assert tau[2] == pytest.approx(1.0 + 1.5 * rho)  # (0,1)
+    assert tau[3] == pytest.approx(1.0 - rho)  # (1,1)
 
 
 def test_dc_tau_rho_zero_is_identity() -> None:
@@ -341,6 +338,30 @@ def test_elo_threshold_walk_small_away_advantage() -> None:
     p = _threshold_predictor(1495.0, 1500.0)  # diff = -5, abs < 250, diff < 0 → (0, 1)
     modal = _predict_modal(p)
     assert tuple(modal[0]) == (0, 1)
+
+
+def test_elo_threshold_walk_update_adjusts_ratings() -> None:
+    elo_hist = pd.DataFrame(
+        {"year": [2019, 2019], "country": ["Strong", "Weak"], "rating": [1800.0, 1200.0]}
+    )
+    p = EloThresholdWalkPredictor()
+    p.fit(pd.DataFrame(), elo_hist, 3.0, 2020)
+    strong_before = p._ratings["Strong"]
+    weak_before = p._ratings["Weak"]
+    # Upset: Weak beats Strong 1-0
+    row = pd.Series(
+        {
+            "home_team": "Strong",
+            "away_team": "Weak",
+            "home_score": 0,
+            "away_score": 1,
+            "neutral": False,
+            "tournament": "FIFA World Cup",
+        }
+    )
+    p.update(row)
+    assert p._ratings["Strong"] < strong_before
+    assert p._ratings["Weak"] > weak_before
 
 
 # ---------------------------------------------------------------------------
