@@ -15,6 +15,16 @@ _API_BASE = "https://api.football-data.org/v4"
 _WC_SEASON = "2026"
 
 # football-data.org team names → canonical names used in results.csv
+_FD_STAGE_TO_ROUND: dict[str, str] = {
+    "GROUP_STAGE": "group",
+    "LAST_32": "r32",
+    "LAST_16": "r16",
+    "QUARTER_FINALS": "qf",
+    "SEMI_FINALS": "sf",
+    "THIRD_PLACE": "3rd",
+    "FINAL": "final",
+}
+
 _FD_TO_CANONICAL: dict[str, str] = {
     "Czechia": "Czech Republic",
     "Bosnia-Herzegovina": "Bosnia and Herzegovina",
@@ -128,6 +138,8 @@ def patch_results_csv() -> int:
 
     results_path = DATA_DIR / "results.csv"
     df = pd.read_csv(results_path)
+    if "round" not in df.columns:
+        df["round"] = ""
     dates = pd.to_datetime(df["date"], errors="coerce")
 
     updated = 0
@@ -137,6 +149,7 @@ def patch_results_csv() -> int:
         away = _canonical(m["awayTeam"]["name"])
         score = m["score"]["fullTime"]
         h_score, a_score = score["home"], score["away"]
+        match_round = _FD_STAGE_TO_ROUND.get(m.get("stage", ""), "")
 
         # Pass 1: exact match
         mask = (dates == api_date) & (df["home_team"] == home) & (df["away_team"] == away)
@@ -159,6 +172,8 @@ def patch_results_csv() -> int:
             row_a = h_score if swapped else a_score
             df.loc[mask, "home_score"] = row_h
             df.loc[mask, "away_score"] = row_a
+            if match_round:
+                df.loc[mask, "round"] = match_round
             updated += mask.sum()
         else:
             new_row = {
@@ -171,6 +186,7 @@ def patch_results_csv() -> int:
                 "city": "",
                 "country": "",
                 "neutral": True,
+                "round": match_round,
             }
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             updated += 1

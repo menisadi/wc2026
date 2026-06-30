@@ -41,6 +41,10 @@ def load_results(min_year: int = 2010) -> pd.DataFrame:
     df = df[df["date"].dt.year >= min_year].copy()
     df["home_score"] = df["home_score"].fillna(0).astype(int)
     df["away_score"] = df["away_score"].fillna(0).astype(int)
+    if "round" not in df.columns:
+        df["round"] = ""
+    else:
+        df["round"] = df["round"].fillna("")
     return df.reset_index(drop=True)
 
 

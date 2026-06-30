@@ -771,6 +771,7 @@ def betting_backtest(
                 int(r["modal_a"]),
                 int(r["home_goals"]),
                 int(r["away_goals"]),
+                *_STAGE_POINTS.get(str(r.get("round", "")), _STAGE_POINTS["group"]),
             )
             for _, r in sub.iterrows()
         ]

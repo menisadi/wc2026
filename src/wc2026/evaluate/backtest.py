@@ -839,6 +839,7 @@ def walk_forward(
                         "away_team": m["away_team"],
                         "neutral": bool(m["neutral"]),
                         "tournament": str(m.get("tournament", "")),
+                        "round": str(m.get("round", "")),
                         "p_home": float(probs[i, 0]),
                         "p_draw": float(probs[i, 1]),
                         "p_away": float(probs[i, 2]),
