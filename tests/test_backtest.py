@@ -11,6 +11,7 @@ from wc2026.evaluate.backtest import (
     EloOnlyPredictor,
     EloThresholdWalkPredictor,
     HomeWinPredictor,
+    PoissonPredictor,
     RandomPoissonPredictor,
     UniformGoalsPredictor,
     UniformPredictor,
@@ -362,6 +363,155 @@ def test_elo_threshold_walk_update_adjusts_ratings() -> None:
     p.update(row)
     assert p._ratings["Strong"] < strong_before
     assert p._ratings["Weak"] > weak_before
+
+
+def _elo_hist_strong_weak() -> pd.DataFrame:
+    return pd.DataFrame(
+        {"year": [2019, 2019], "country": ["Strong", "Weak"], "rating": [1600.0, 1500.0]}
+    )
+
+
+def _row(date: str, hs: int, aws: int, tournament: str) -> dict[str, object]:
+    return {
+        "date": pd.Timestamp(date),
+        "home_team": "Strong",
+        "away_team": "Weak",
+        "home_score": hs,
+        "away_score": aws,
+        "neutral": True,
+        "tournament": tournament,
+    }
+
+
+def test_walk_forward_steps_elo_through_non_eval_matches() -> None:
+    """Gap A: a sequential predictor updates ELO on non-eval matches too, so eval
+    predictions use ratings current to the day — not the frozen prior year-end.
+
+    Compares two runs that differ only by a non-eval friendly before the eval match;
+    the friendly must move the ratings, proving it was stepped through."""
+    elo_hist = _elo_hist_strong_weak()
+    train_row = _row("2019-01-01", 1, 1, "Friendly")  # <since_year: training-guard only
+    wc_row = _row("2020-06-01", 1, 1, "FIFA World Cup")  # the sole eval match
+    friendly_upset = _row("2020-03-01", 0, 3, "Friendly")  # non-eval, stepped via gap A
+
+    without = pd.DataFrame([train_row, wc_row])
+    with_friendly = pd.DataFrame([train_row, friendly_upset, wc_row])
+
+    p_without = EloThresholdWalkPredictor()
+    p_with = EloThresholdWalkPredictor()
+    res_without = walk_forward(
+        without, elo_hist, [p_without], since_year=2020, tournaments_only=True
+    )
+    res_with = walk_forward(
+        with_friendly, elo_hist, [p_with], since_year=2020, tournaments_only=True
+    )
+
+    # Both score exactly the one World Cup match — the friendly is excluded from eval.
+    assert len(res_without.predictions) == 1
+    assert len(res_with.predictions) == 1
+    # But the friendly upset (Weak beats Strong 3-0) was stepped through, dragging
+    # Strong down and lifting Weak relative to the run without it.
+    assert p_with._ratings["Strong"] < p_without._ratings["Strong"]
+    assert p_with._ratings["Weak"] > p_without._ratings["Weak"]
+
+
+# ---------------------------------------------------------------------------
+# PoissonPredictor sequential ELO update
+# ---------------------------------------------------------------------------
+
+
+def _poisson_training_data() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """A small multi-year fixture sufficient to fit the ELO-enabled PoissonModel."""
+    teams = ["A", "B", "C", "D"]
+    rows: list[dict[str, object]] = []
+    for year in (2018, 2019, 2020):
+        for i, h in enumerate(teams):
+            a = teams[(i + 1) % len(teams)]
+            rows.append(
+                {
+                    "date": pd.Timestamp(f"{year}-06-0{i + 1}"),
+                    "home_team": h,
+                    "away_team": a,
+                    "home_score": (i + year) % 4,
+                    "away_score": i % 3,
+                    "neutral": False,
+                    "tournament": "Friendly",
+                }
+            )
+    results = pd.DataFrame(rows)
+    elo_hist = pd.DataFrame(
+        {
+            "year": [y for y in (2018, 2019, 2020) for _ in teams],
+            "country": teams * 3,
+            "rating": [1700.0, 1500.0, 1300.0, 1100.0] * 3,
+        }
+    )
+    return results, elo_hist
+
+
+def test_poisson_predictor_is_sequential() -> None:
+    assert PoissonPredictor.is_sequential is True
+
+
+def test_poisson_predictor_update_adjusts_elo_and_z_score() -> None:
+    results, elo_hist = _poisson_training_data()
+    p = PoissonPredictor(use_elo=True)
+    p.fit(results, elo_hist, 3.0, 2021)
+    model = p._model
+    assert model is not None
+
+    strong_before = model._strengths["A"].elo
+    weak_before = model._strengths["D"].elo
+    z_weak_before = model._elo_z("D")
+
+    # Upset: weak D beats strong A 3-0 on a neutral pitch.
+    p.update(
+        pd.Series(
+            {
+                "home_team": "D",
+                "away_team": "A",
+                "home_score": 3,
+                "away_score": 0,
+                "neutral": True,
+                "tournament": "FIFA World Cup",
+            }
+        )
+    )
+
+    assert model._strengths["D"].elo > weak_before
+    assert model._strengths["A"].elo < strong_before
+    # Predict-time z-score reflects the updated (not the frozen) rating.
+    assert model._elo_z("D") > z_weak_before
+
+
+def test_poisson_walk_forward_sequential_runs() -> None:
+    results, elo_hist = _poisson_training_data()
+    # Add an eval year so walk_forward exercises the sequential branch.
+    extra = results.copy()
+    extra["date"] = extra["date"] + pd.offsets.DateOffset(years=3)
+    full = pd.concat([results, extra], ignore_index=True)
+
+    res = walk_forward(full, elo_hist, [PoissonPredictor(use_elo=True)], since_year=2021)
+    assert not res.predictions.empty
+    assert set(res.predictions["predictor"]) == {"poisson+elo"}
+
+
+def test_poisson_walk_forward_leak_free_feature_path() -> None:
+    from wc2026.data.elo import compute_prematch_elo
+
+    results, elo_hist = _poisson_training_data()
+    extra = results.copy()
+    extra["date"] = extra["date"] + pd.offsets.DateOffset(years=3)
+    full = pd.concat([results, extra], ignore_index=True)
+
+    elo_by_match = compute_prematch_elo(full)
+    p = PoissonPredictor(use_elo=True)
+    res = walk_forward(full, elo_hist, [p], since_year=2021, elo_by_match=elo_by_match)
+
+    assert not res.predictions.empty
+    # The leak-free per-match feature was wired through and used at fit time.
+    assert p._elo_by_match is elo_by_match
+    assert p._model is not None and p._model._has_elo_feature is True
 
 
 # ---------------------------------------------------------------------------

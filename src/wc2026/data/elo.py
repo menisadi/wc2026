@@ -76,6 +76,32 @@ def _goal_diff_multiplier(goal_diff: int) -> float:
     return (11.0 + n) / 8.0
 
 
+def elo_delta(
+    home_rating: float,
+    away_rating: float,
+    home_score: int,
+    away_score: int,
+    neutral: bool,
+    tournament: str,
+) -> float:
+    """Rating change applied to the home team after a match (away team gets ``-delta``).
+
+    The single source of truth for the per-match Elo update, shared by
+    ``compute_elo_history`` (offline pass over full history) and the walk-forward
+    backtest's sequential update, so the two can never drift apart.
+    """
+    home_adv = 0.0 if neutral else HOME_ADVANTAGE
+    dr = (home_rating + home_adv) - away_rating
+    we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
+    if home_score > away_score:
+        w_h = 1.0
+    elif home_score == away_score:
+        w_h = 0.5
+    else:
+        w_h = 0.0
+    return k_value(tournament) * _goal_diff_multiplier(home_score - away_score) * (w_h - we_h)
+
+
 def compute_elo_history(
     results: pd.DataFrame,
     initial_rating: float = DEFAULT_INITIAL_RATING,
@@ -113,20 +139,7 @@ def compute_elo_history(
         last_year = y
 
         rh, ra = elo[h], elo[a]
-        home_adv = 0.0 if neutral else HOME_ADVANTAGE
-        dr = (rh + home_adv) - ra
-        we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
-
-        if gh > ga:
-            w_h = 1.0
-        elif gh == ga:
-            w_h = 0.5
-        else:
-            w_h = 0.0
-
-        g = _goal_diff_multiplier(gh - ga)
-        k = k_value(str(tourn))
-        delta = k * g * (w_h - we_h)
+        delta = elo_delta(rh, ra, gh, ga, bool(neutral), str(tourn))
         elo[h] = rh + delta
         elo[a] = ra - delta
 
@@ -135,6 +148,51 @@ def compute_elo_history(
             snapshots.append((team, last_year, rating))
 
     return pd.DataFrame(snapshots, columns=["country", "year", "rating"])
+
+
+def compute_prematch_elo(
+    results: pd.DataFrame,
+    initial_rating: float = DEFAULT_INITIAL_RATING,
+) -> pd.DataFrame:
+    """Return each match's *pre-match* Elo ratings — a leak-free training feature.
+
+    Walks matches in date order (same pass as ``compute_elo_history``) and records
+    the home/away rating as it stood *before* the match was played. A match's
+    feature therefore never reflects its own result nor any later result, unlike
+    the year-end snapshots, which tag a March match with its team's December rating.
+
+    Output columns: date, home_team, away_team, home_elo, away_elo (one row per
+    scored match, in date order). Compute this over the *full* history so early
+    matches carry their true prior ratings, then join onto the training subset.
+    """
+    df = results.dropna(subset=["home_score", "away_score"]).copy()
+    df = df.sort_values("date").reset_index(drop=True)
+
+    elo: dict[str, float] = {}
+    home_pre: list[float] = []
+    away_pre: list[float] = []
+
+    home_teams = df["home_team"].tolist()
+    away_teams = df["away_team"].tolist()
+    home_scores = df["home_score"].astype(int).tolist()
+    away_scores = df["away_score"].astype(int).tolist()
+    neutrals = df["neutral"].tolist()
+    tournaments = df["tournament"].tolist()
+
+    for h, a, gh, ga, neutral, tourn in zip(
+        home_teams, away_teams, home_scores, away_scores, neutrals, tournaments
+    ):
+        rh = elo.setdefault(h, initial_rating)
+        ra = elo.setdefault(a, initial_rating)
+        home_pre.append(rh)
+        away_pre.append(ra)
+        delta = elo_delta(rh, ra, gh, ga, bool(neutral), str(tourn))
+        elo[h] = rh + delta
+        elo[a] = ra - delta
+
+    df["home_elo"] = home_pre
+    df["away_elo"] = away_pre
+    return df[["date", "home_team", "away_team", "home_elo", "away_elo"]]
 
 
 def load_or_compute_elo_history(force_refresh: bool = False) -> pd.DataFrame:
