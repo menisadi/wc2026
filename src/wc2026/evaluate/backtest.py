@@ -266,12 +266,20 @@ class RandomPoissonPredictor:
 
 
 class PoissonPredictor:
-    """Wraps PoissonModel. `use_elo` toggles the ELO feature inside the regression."""
+    """Wraps PoissonModel. `use_elo` toggles the ELO feature inside the regression.
+
+    is_sequential=True: walk_forward predicts one match at a time and calls update()
+    between each, so the ELO ratings used at predict-time evolve as matches are played
+    (regression coefficients remain fixed — only the ELO z-scores update).
+    """
+
+    is_sequential: bool = True
 
     def __init__(self, use_elo: bool = True) -> None:
         self.use_elo = use_elo
         self.name = "poisson+elo" if use_elo else "poisson"
         self._model: PoissonModel | None = None
+        self._fallback_elo: float = 1500.0
 
     def fit(
         self,
@@ -292,6 +300,8 @@ class PoissonPredictor:
                 )
                 for row in latest.itertuples(index=False)
             }
+            if strengths:
+                self._fallback_elo = float(np.median([s.elo for s in strengths.values()]))
             elo_feature = elo_history[elo_history["year"] < year_cutoff] if self.use_elo else None
         else:
             strengths = {}
@@ -305,6 +315,37 @@ class PoissonPredictor:
             elo_history=elo_feature,
         )
         self._model = model
+
+    def update(self, match_row: pd.Series) -> None:
+        """Update ELO ratings in _strengths after observing a result."""
+        from wc2026.data.elo import HOME_ADVANTAGE, _goal_diff_multiplier, k_value
+
+        assert self._model is not None
+        strengths = self._model._strengths
+
+        home = str(match_row["home_team"])
+        away = str(match_row["away_team"])
+        gh = int(match_row["home_score"])
+        ga = int(match_row["away_score"])
+        neutral = bool(match_row["neutral"])
+        tournament = str(match_row.get("tournament", ""))
+
+        def _rating(team: str) -> float:
+            return strengths[team].elo if team in strengths else self._fallback_elo
+
+        rh, ra = _rating(home), _rating(away)
+        home_adv = 0.0 if neutral else HOME_ADVANTAGE
+        dr = (rh + home_adv) - ra
+        we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
+        w_h = 1.0 if gh > ga else (0.5 if gh == ga else 0.0)
+        delta = k_value(tournament) * _goal_diff_multiplier(gh - ga) * (w_h - we_h)
+
+        if home not in strengths:
+            strengths[home] = TeamStrength(name=home, elo=rh, fifa_rank=200, fifa_points=0.0)
+        if away not in strengths:
+            strengths[away] = TeamStrength(name=away, elo=ra, fifa_rank=200, fifa_points=0.0)
+        strengths[home].elo = rh + delta
+        strengths[away].elo = ra - delta
 
     def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
         assert self._model is not None
@@ -1207,6 +1248,7 @@ class OutcomeFirstPredictor:
     """
 
     name = "poisson-outcome-first"
+    is_sequential: bool = True
 
     def __init__(self) -> None:
         self._base = PoissonPredictor(use_elo=True)
@@ -1239,6 +1281,9 @@ class OutcomeFirstPredictor:
             scores.append(_modal_in_class(xg_h, xg_a, best_outcome))
         return np.array(scores, dtype=int)
 
+    def update(self, match_row: pd.Series) -> None:
+        self._base.update(match_row)
+
 
 class BestEvPredictor:
     """Pick the score that maximises EV = 2·P(exact score) + P(outcome class).
@@ -1249,6 +1294,7 @@ class BestEvPredictor:
     """
 
     name = "poisson-best-ev"
+    is_sequential: bool = True
 
     def __init__(self) -> None:
         self._base = PoissonPredictor(use_elo=True)
@@ -1288,6 +1334,9 @@ class BestEvPredictor:
                     best = (h, a)
             scores.append(best)
         return np.array(scores, dtype=int)
+
+    def update(self, match_row: pd.Series) -> None:
+        self._base.update(match_row)
 
 
 def build_predictors(names: list[str]) -> list[Predictor]:
