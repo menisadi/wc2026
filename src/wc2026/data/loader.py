@@ -39,6 +39,9 @@ def _normalize(name: str, mapping: dict[str, str]) -> str:
 def load_results(min_year: int = 2010) -> pd.DataFrame:
     df = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
     df = df[df["date"].dt.year >= min_year].copy()
+    df["home_team"] = df["home_team"].map(lambda t: _normalize(str(t), RESULTS_TO_CANONICAL))
+    df["away_team"] = df["away_team"].map(lambda t: _normalize(str(t), RESULTS_TO_CANONICAL))
+    df = df.drop_duplicates(subset=["date", "home_team", "away_team"], keep="last")
     df["home_score"] = df["home_score"].fillna(0).astype(int)
     df["away_score"] = df["away_score"].fillna(0).astype(int)
     if "round" not in df.columns:
