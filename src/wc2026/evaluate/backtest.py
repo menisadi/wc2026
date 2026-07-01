@@ -280,6 +280,12 @@ class PoissonPredictor:
         self.name = "poisson+elo" if use_elo else "poisson"
         self._model: PoissonModel | None = None
         self._fallback_elo: float = 1500.0
+        # Full-history per-match pre-match ELO (leak-free training feature). Set by
+        # walk_forward; when None, fit falls back to the year-end snapshot feature.
+        self._elo_by_match: pd.DataFrame | None = None
+
+    def set_elo_by_match(self, elo_by_match: pd.DataFrame | None) -> None:
+        self._elo_by_match = elo_by_match
 
     def fit(
         self,
@@ -307,18 +313,26 @@ class PoissonPredictor:
             strengths = {}
             elo_feature = None
 
+        # Leak-free path: restrict the pre-match table to matches strictly before the
+        # eval year so the training feature never sees within-eval-year results.
+        elo_by_match = None
+        if self.use_elo and self._elo_by_match is not None:
+            tbl = self._elo_by_match
+            elo_by_match = tbl[tbl["date"].dt.year < year_cutoff]
+
         model = PoissonModel()
         _ = model.fit(
             training,
             strengths,
             half_life_years=half_life,
             elo_history=elo_feature,
+            elo_by_match=elo_by_match,
         )
         self._model = model
 
     def update(self, match_row: pd.Series) -> None:
         """Update ELO ratings in _strengths after observing a result."""
-        from wc2026.data.elo import HOME_ADVANTAGE, _goal_diff_multiplier, k_value
+        from wc2026.data.elo import elo_delta
 
         assert self._model is not None
         strengths = self._model._strengths
@@ -334,11 +348,7 @@ class PoissonPredictor:
             return strengths[team].elo if team in strengths else self._fallback_elo
 
         rh, ra = _rating(home), _rating(away)
-        home_adv = 0.0 if neutral else HOME_ADVANTAGE
-        dr = (rh + home_adv) - ra
-        we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
-        w_h = 1.0 if gh > ga else (0.5 if gh == ga else 0.0)
-        delta = k_value(tournament) * _goal_diff_multiplier(gh - ga) * (w_h - we_h)
+        delta = elo_delta(rh, ra, gh, ga, neutral, tournament)
 
         if home not in strengths:
             strengths[home] = TeamStrength(name=home, elo=rh, fifa_rank=200, fifa_points=0.0)
@@ -825,6 +835,7 @@ def walk_forward(
     neutral_only: bool = False,
     tournaments_only: bool = False,
     progress: Callable[[str], None] | None = None,
+    elo_by_match: pd.DataFrame | None = None,
 ) -> BacktestResult:
     """Yearly walk-forward over `since_year..max(year)`.
 
@@ -833,6 +844,15 @@ def walk_forward(
         by neutral_only / tournaments_only — only the eval set is)
       - predict every match in year Y (filtered)
       - accumulate one row per (predictor, match)
+
+    Sequential predictors (is_sequential=True) step their ELO ratings through *every*
+    match of year Y in date order — including matches excluded from the eval set — so a
+    team's rating is current to the day of each prediction, not frozen at the prior
+    year-end. Only eval-set matches produce scored rows.
+
+    `elo_by_match` (optional) is a full-history per-match pre-match ELO table
+    (see compute_prematch_elo); when given it is handed to any predictor exposing
+    set_elo_by_match, replacing the leaky year-end training feature.
     """
     df = results.dropna(subset=["home_score", "away_score"]).copy()
     df["year"] = df["date"].dt.year
@@ -847,12 +867,30 @@ def walk_forward(
     if not eval_years:
         raise ValueError(f"No matches found in/after {since_year}.")
 
+    for p in predictors:
+        setter = getattr(p, "set_elo_by_match", None)
+        if setter is not None:
+            setter(elo_by_match)
+
+    def _in_eval(frame: pd.DataFrame) -> pd.Series:
+        mask = pd.Series(True, index=frame.index)
+        if neutral_only:
+            mask &= frame["neutral"].astype(bool)
+        if tournaments_only:
+            mask &= frame["tournament"].isin(MAJOR_TOURNAMENTS)
+        return mask
+
     rows: list[dict[str, Any]] = []
     for y in eval_years:
         train = df[df["year"] < y].drop(columns="year")
         test = eval_df[eval_df["year"] == y].drop(columns="year").reset_index(drop=True)
+        # All year-Y matches (unfiltered) in date order, for sequential ELO stepping.
+        year_all = (
+            df[df["year"] == y].drop(columns="year").sort_values("date").reset_index(drop=True)
+        )
         if train.empty or test.empty:
             continue
+        eval_mask = _in_eval(year_all)
 
         outcomes = np.array(
             [
@@ -867,9 +905,11 @@ def walk_forward(
             p.fit(train, elo_history, half_life, y)
 
             if getattr(p, "is_sequential", False):
-                test_seq = test.sort_values("date").reset_index(drop=True)
-                for i, (_, m) in enumerate(test_seq.iterrows()):
-                    row_df = test_seq.iloc[[i]]
+                for i, (_, m) in enumerate(year_all.iterrows()):
+                    if not bool(eval_mask.iloc[i]):
+                        getattr(p, "update")(m)  # step ELO on non-eval matches too
+                        continue
+                    row_df = year_all.iloc[[i]]
                     probs_i = p.predict_proba(row_df)
                     xgs_i = p.predict_xg(row_df)
                     score_lls_i = p.predict_score_ll(row_df)
@@ -1281,6 +1321,9 @@ class OutcomeFirstPredictor:
             scores.append(_modal_in_class(xg_h, xg_a, best_outcome))
         return np.array(scores, dtype=int)
 
+    def set_elo_by_match(self, elo_by_match: pd.DataFrame | None) -> None:
+        self._base.set_elo_by_match(elo_by_match)
+
     def update(self, match_row: pd.Series) -> None:
         self._base.update(match_row)
 
@@ -1334,6 +1377,9 @@ class BestEvPredictor:
                     best = (h, a)
             scores.append(best)
         return np.array(scores, dtype=int)
+
+    def set_elo_by_match(self, elo_by_match: pd.DataFrame | None) -> None:
+        self._base.set_elo_by_match(elo_by_match)
 
     def update(self, match_row: pd.Series) -> None:
         self._base.update(match_row)

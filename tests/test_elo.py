@@ -8,6 +8,8 @@ from wc2026.data.elo import (
     HOME_ADVANTAGE,
     _goal_diff_multiplier,
     compute_elo_history,
+    compute_prematch_elo,
+    elo_delta,
     k_value,
 )
 
@@ -35,6 +37,71 @@ def test_goal_diff_multiplier() -> None:
     assert _goal_diff_multiplier(2) == 1.5
     assert _goal_diff_multiplier(3) == pytest.approx(14.0 / 8.0)
     assert _goal_diff_multiplier(5) == pytest.approx(16.0 / 8.0)
+
+
+def test_elo_delta_matches_manual_formula() -> None:
+    # Equal ratings, neutral friendly, home wins by 1: K=20, G=1, We=0.5 → +10.
+    assert elo_delta(1500.0, 1500.0, 1, 0, True, "Friendly") == pytest.approx(10.0)
+    # Draw between equals → no change.
+    assert elo_delta(1500.0, 1500.0, 0, 0, True, "Friendly") == pytest.approx(0.0)
+    # Home advantage makes an equal-rating home draw a loss of rating for the home side.
+    assert elo_delta(1500.0, 1500.0, 0, 0, False, "Friendly") < 0.0
+
+
+def test_compute_prematch_elo_is_leak_free() -> None:
+    """A match's feature reflects only *prior* results, never its own or later ones."""
+    df = _toy(
+        [
+            {
+                "date": "2020-01-01",
+                "home_team": "A",
+                "away_team": "B",
+                "home_score": 3,
+                "away_score": 0,
+                "neutral": True,
+                "tournament": "Friendly",
+            },
+            {
+                "date": "2020-02-01",
+                "home_team": "A",
+                "away_team": "C",
+                "home_score": 0,
+                "away_score": 0,
+                "neutral": True,
+                "tournament": "Friendly",
+            },
+        ]
+    )
+    pm = compute_prematch_elo(df).reset_index(drop=True)
+    # First match: both teams unseen → initial rating, NOT reflecting the 3-0 result.
+    assert pm.loc[0, "home_elo"] == pytest.approx(DEFAULT_INITIAL_RATING)
+    assert pm.loc[0, "away_elo"] == pytest.approx(DEFAULT_INITIAL_RATING)
+    # Second match: A's pre-match rating reflects its match-1 win (rose above initial);
+    # C is unseen so still at the initial rating.
+    assert cast(float, pm.loc[1, "home_elo"]) > DEFAULT_INITIAL_RATING
+    assert pm.loc[1, "away_elo"] == pytest.approx(DEFAULT_INITIAL_RATING)
+
+
+def test_compute_prematch_elo_consistent_with_history_endpoint() -> None:
+    """After the walk, the accumulated rating matches compute_elo_history's snapshot."""
+    df = _toy(
+        [
+            {
+                "date": "2020-01-01",
+                "home_team": "A",
+                "away_team": "B",
+                "home_score": 2,
+                "away_score": 1,
+                "neutral": True,
+                "tournament": "Friendly",
+            },
+        ]
+    )
+    pm = compute_prematch_elo(df).reset_index(drop=True)
+    delta = elo_delta(DEFAULT_INITIAL_RATING, DEFAULT_INITIAL_RATING, 2, 1, True, "Friendly")
+    hist = compute_elo_history(df).set_index("country")["rating"]
+    assert pm.loc[0, "home_elo"] == pytest.approx(DEFAULT_INITIAL_RATING)  # pre-match
+    assert hist["A"] == pytest.approx(DEFAULT_INITIAL_RATING + delta)  # post-match snapshot
 
 
 def test_compute_elo_two_teams_equal_then_diverge() -> None:

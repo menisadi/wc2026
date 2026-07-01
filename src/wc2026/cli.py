@@ -40,6 +40,7 @@ def _load_and_train(
     from wc2026.data.elo import (
         ELO_COMPUTE_MIN_YEAR,
         compute_elo_history,
+        compute_prematch_elo,
         load_or_compute_elo_history,
     )
     from wc2026.data.loader import (
@@ -64,10 +65,12 @@ def _load_and_train(
             frozen = load_results(min_year=ELO_COMPUTE_MIN_YEAR)
             frozen = frozen[frozen["date"].dt.date < cutoff_date]
             elo_history = compute_elo_history(frozen)
+            elo_by_match = compute_prematch_elo(frozen)
         else:
             # Self-computed ELO covers all 321 teams (vs ~48 in the bundled file).
             # Cached to data/elo_history_computed.csv; refresh-data regenerates it.
             elo_history = load_or_compute_elo_history()
+            elo_by_match = compute_prematch_elo(load_results(min_year=ELO_COMPUTE_MIN_YEAR))
 
         # Latest computed rating per team — used for predict-time fallback. Must
         # match the source used in training (elo_history) to keep _elo_z consistent.
@@ -85,7 +88,13 @@ def _load_and_train(
 
     with _status("Training Poisson model…", quiet):
         model = PoissonModel()
-        _ = model.fit(results, strengths, half_life_years=half_life, elo_history=elo_history)
+        _ = model.fit(
+            results,
+            strengths,
+            half_life_years=half_life,
+            elo_history=elo_history,
+            elo_by_match=elo_by_match,
+        )
 
     return model, groups, strengths
 
@@ -560,7 +569,11 @@ def backtest(
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress messages."),
 ) -> None:
     """Walk-forward backtest: train on past, predict each year, score W/D/L probabilities."""
-    from wc2026.data.elo import load_or_compute_elo_history
+    from wc2026.data.elo import (
+        ELO_COMPUTE_MIN_YEAR,
+        compute_prematch_elo,
+        load_or_compute_elo_history,
+    )
     from wc2026.data.loader import load_results
     from wc2026.evaluate.backtest import build_predictors, walk_forward
     from wc2026.evaluate.metrics import (
@@ -580,6 +593,9 @@ def backtest(
     with _status("Loading data…", quiet):
         results = load_results(min_year=2000)
         elo_history = load_or_compute_elo_history()
+        # Full-history pre-match ELO so the training feature is leak-free (each match
+        # tagged with the rating *before* kickoff, carrying pre-2000 history).
+        elo_by_match = compute_prematch_elo(load_results(min_year=ELO_COMPUTE_MIN_YEAR))
 
     predictors = build_predictors(predictor_names)
 
@@ -596,6 +612,7 @@ def backtest(
         neutral_only=neutral_only,
         tournaments_only=tournaments_only,
         progress=progress,
+        elo_by_match=elo_by_match,
     )
 
     metric_rows: list[tuple[str, float, float, float, float, int]] = []
@@ -729,7 +746,11 @@ def betting_backtest(
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress messages."),
 ) -> None:
     """Score predictors with the 3/1/0 betting rule on their modal score predictions."""
-    from wc2026.data.elo import load_or_compute_elo_history
+    from wc2026.data.elo import (
+        ELO_COMPUTE_MIN_YEAR,
+        compute_prematch_elo,
+        load_or_compute_elo_history,
+    )
     from wc2026.data.loader import load_results
     from wc2026.evaluate.backtest import build_predictors, walk_forward
     from wc2026.evaluate.metrics import betting_score
@@ -739,6 +760,7 @@ def betting_backtest(
     with _status("Loading data…", quiet):
         results = load_results(min_year=2000)
         elo_history = load_or_compute_elo_history()
+        elo_by_match = compute_prematch_elo(load_results(min_year=ELO_COMPUTE_MIN_YEAR))
 
     preds = build_predictors(predictor_names)
 
@@ -755,6 +777,7 @@ def betting_backtest(
         neutral_only=neutral_only,
         tournaments_only=tournaments_only,
         progress=progress,
+        elo_by_match=elo_by_match,
     )
 
     score_rows: list[tuple[str, int, int, int, int, int]] = []

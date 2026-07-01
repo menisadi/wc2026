@@ -65,11 +65,22 @@ class PoissonModel:
         strengths: dict[str, TeamStrength],
         half_life_years: float = 3.0,
         elo_history: pd.DataFrame | None = None,
+        elo_by_match: pd.DataFrame | None = None,
     ) -> PoissonModel:
         df = results.dropna(subset=["home_score", "away_score"]).copy()
 
-        # If ELO history is provided, attach per-match ELO and drop rows missing either side
-        if elo_history is not None and not elo_history.empty:
+        # Preferred: leak-free per-match pre-match ELO (each match tagged with the
+        # rating as it stood *before* kickoff). Joined on (date, home, away).
+        if elo_by_match is not None and not elo_by_match.empty:
+            key = ["date", "home_team", "away_team"]
+            lookup = elo_by_match.drop_duplicates(subset=key, keep="first")
+            df = df.merge(lookup, on=key, how="left")
+            df = df.dropna(subset=["home_elo", "away_elo"]).reset_index(drop=True)
+            df["_home_elo"] = df["home_elo"]
+            df["_away_elo"] = df["away_elo"]
+            self._has_elo_feature = True
+        # Fallback: year-end snapshots (leaks within-year results into the feature).
+        elif elo_history is not None and not elo_history.empty:
             elo_lookup: dict[tuple[str, int], float] = {
                 (str(c), int(y)): float(rt)
                 for c, y, rt in zip(
