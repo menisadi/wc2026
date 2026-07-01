@@ -866,7 +866,7 @@ def refresh_data(
                 console.print("  [green]✓[/green] done")
 
     console.print("Fetching live WC 2026 results…")
-    from wc2026.data.live import patch_results_csv
+    from wc2026.data.live import patch_results_csv, verify_knockout_scores
 
     try:
         n = patch_results_csv()
@@ -874,6 +874,18 @@ def refresh_data(
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+    console.print("Verifying knockout scores against Wikipedia…")
+    try:
+        mismatches = verify_knockout_scores()
+        if mismatches:
+            for msg in mismatches:
+                console.print(f"  [red]⚠ score mismatch:[/red] {msg}")
+            console.print("  [yellow]Fix results.csv manually or re-check the API source.[/yellow]")
+        else:
+            console.print("  [green]✓[/green] knockout scores match Wikipedia")
+    except Exception as e:
+        console.print(f"  [yellow]skipped:[/yellow] Wikipedia check failed ({e})")
 
     console.print("Recomputing ELO history…")
     from wc2026.data.elo import ELO_CACHE_PATH, load_or_compute_elo_history

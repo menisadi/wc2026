@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -35,12 +37,97 @@ _FD_TO_CANONICAL: dict[str, str] = {
     "Congo DR": "DR Congo",
 }
 
+# Wikipedia {{fb|CODE}} 3-letter codes → canonical team names
+_WIKI_FB_TO_CANONICAL: dict[str, str] = {
+    "ALG": "Algeria",
+    "ARG": "Argentina",
+    "AUS": "Australia",
+    "BEL": "Belgium",
+    "BIH": "Bosnia and Herzegovina",
+    "BRA": "Brazil",
+    "CMR": "Cameroon",
+    "CAN": "Canada",
+    "CPV": "Cape Verde",
+    "CHL": "Chile",
+    "CHN": "China PR",
+    "CIV": "Ivory Coast",
+    "COL": "Colombia",
+    "COD": "DR Congo",
+    "CRC": "Costa Rica",
+    "CRO": "Croatia",
+    "CZE": "Czech Republic",
+    "DEN": "Denmark",
+    "ECU": "Ecuador",
+    "EGY": "Egypt",
+    "SLV": "El Salvador",
+    "ENG": "England",
+    "FIN": "Finland",
+    "FRA": "France",
+    "GEO": "Georgia",
+    "GER": "Germany",
+    "GHA": "Ghana",
+    "GRE": "Greece",
+    "HON": "Honduras",
+    "HUN": "Hungary",
+    "ISL": "Iceland",
+    "IRN": "Iran",
+    "IRL": "Republic of Ireland",
+    "ISR": "Israel",
+    "ITA": "Italy",
+    "JAM": "Jamaica",
+    "JPN": "Japan",
+    "JOR": "Jordan",
+    "KEN": "Kenya",
+    "KOR": "South Korea",
+    "MAR": "Morocco",
+    "MEX": "Mexico",
+    "NED": "Netherlands",
+    "NZL": "New Zealand",
+    "NGA": "Nigeria",
+    "NOR": "Norway",
+    "OMA": "Oman",
+    "PAN": "Panama",
+    "PAR": "Paraguay",
+    "PER": "Peru",
+    "POL": "Poland",
+    "POR": "Portugal",
+    "QAT": "Qatar",
+    "ROU": "Romania",
+    "RSA": "South Africa",
+    "KSA": "Saudi Arabia",
+    "SCO": "Scotland",
+    "SEN": "Senegal",
+    "SRB": "Serbia",
+    "SVK": "Slovakia",
+    "SVN": "Slovenia",
+    "ESP": "Spain",
+    "SWE": "Sweden",
+    "SUI": "Switzerland",
+    "TUN": "Tunisia",
+    "TUR": "Turkey",
+    "UKR": "Ukraine",
+    "UAE": "United Arab Emirates",
+    "USA": "United States",
+    "URU": "Uruguay",
+    "UZB": "Uzbekistan",
+    "VEN": "Venezuela",
+    "WAL": "Wales",
+}
+
 
 def _canonical(name: str) -> str:
     # Apply football-data → canonical, then the results.csv normalization
     # (e.g. "Cape Verde Islands" → "Cape Verde") so names match the simulator.
     name = _FD_TO_CANONICAL.get(name, name)
     return RESULTS_TO_CANONICAL.get(name, name)
+
+
+def _wiki_canonical(name: str) -> str:
+    """Normalise a name that came from Wikipedia wikitext."""
+    # Try the fb-code mapping first, then fall through to the standard path
+    if name in _WIKI_FB_TO_CANONICAL:
+        name = _WIKI_FB_TO_CANONICAL[name]
+    return _canonical(name)
 
 
 def _get_api_key() -> str:
@@ -147,8 +234,21 @@ def patch_results_csv() -> int:
         api_date = pd.Timestamp(m["utcDate"][:10])
         home = _canonical(m["homeTeam"]["name"])
         away = _canonical(m["awayTeam"]["name"])
-        score = m["score"]["fullTime"]
-        h_score, a_score = score["home"], score["away"]
+
+        # Use the 90+ET score (no penalty goals).
+        # For PENALTY_SHOOTOUT games the API's fullTime adds penalty goals on top;
+        # regularTime gives the 90-min score and extraTime the delta ET goals.
+        score_obj = m["score"]
+        duration = score_obj.get("duration", "REGULAR")
+        if duration == "PENALTY_SHOOTOUT":
+            reg = score_obj.get("regularTime") or {}
+            et = score_obj.get("extraTime") or {}
+            h_score = (reg.get("home") or 0) + (et.get("home") or 0)
+            a_score = (reg.get("away") or 0) + (et.get("away") or 0)
+        else:
+            h_score = score_obj["fullTime"]["home"]
+            a_score = score_obj["fullTime"]["away"]
+
         match_round = _FD_STAGE_TO_ROUND.get(m.get("stage", ""), "")
 
         # Pass 1: exact match
@@ -194,3 +294,157 @@ def patch_results_csv() -> int:
     df = _drop_phantoms(df)
     df.to_csv(results_path, index=False)
     return updated
+
+
+def _extract_wikitext_team(raw: str) -> str:
+    """Extract a canonical team name from a wikitext field value.
+
+    Handles three common formats:
+      {{fb|NED}}                        → "Netherlands"
+      [[Netherlands national ...|Netherlands]]  → "Netherlands"
+      Netherlands                        → "Netherlands"
+    """
+    raw = raw.strip()
+    # {{fb|CODE}} or {{nft|CODE}} or similar single-argument templates
+    m = re.match(r"\{\{[^|{}]+\|([A-Z]{2,4})\s*[|}]", raw)
+    if m:
+        code = m.group(1)
+        if code in _WIKI_FB_TO_CANONICAL:
+            return _wiki_canonical(code)
+    # [[Page name|Display name]] wiki link
+    m2 = re.match(r"\[\[[^\]|]+\|([^\]]+)\]\]", raw)
+    if m2:
+        return _wiki_canonical(m2.group(1).strip())
+    # Plain text (strip any remaining wiki markup)
+    plain = re.sub(r"\[\[|\]\]|\{\{[^}]*\}\}", "", raw).strip()
+    return _wiki_canonical(plain) if plain else raw
+
+
+def fetch_wikipedia_knockout_results() -> list[dict[str, Any]]:
+    """Fetch WC 2026 knockout scores from the Wikipedia knockout-stage article.
+
+    Uses the MediaWiki action API to get raw wikitext and parses
+    ``{{Football box}}`` templates. Returns a list of
+    ``{home, away, home_score, away_score}`` dicts for every completed match
+    found. Returns an empty list on any network or parse error so callers can
+    treat it as a non-blocking check.
+    """
+    page = "2026_FIFA_World_Cup_knockout_stage"
+    api_url = (
+        "https://en.wikipedia.org/w/api.php"
+        f"?action=parse&page={urllib.parse.quote(page)}&prop=wikitext&format=json"
+    )
+    req = urllib.request.Request(api_url, headers={"User-Agent": "WC2026-predictor/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        wikitext: str = data["parse"]["wikitext"]["*"]
+    except Exception:
+        return []
+
+    results: list[dict[str, Any]] = []
+
+    # Locate every {{Football box ... }} block.
+    # We scan for the opening marker and collect characters until the matching }}.
+    search_str = "{{Football box"
+    pos = 0
+    while True:
+        start = wikitext.find(search_str, pos)
+        if start == -1:
+            break
+        # Walk forward counting braces to find the closing }}
+        depth = 0
+        i = start
+        while i < len(wikitext):
+            if wikitext[i : i + 2] == "{{":
+                depth += 1
+                i += 2
+            elif wikitext[i : i + 2] == "}}":
+                depth -= 1
+                i += 2
+                if depth == 0:
+                    break
+            else:
+                i += 1
+        content = wikitext[start:i]
+        pos = i
+
+        # Extract |score=X–Y  (en-dash or hyphen accepted)
+        score_m = re.search(r"\|\s*score\s*=\s*(\d+)\s*[–\-]\s*(\d+)", content)
+        if not score_m:
+            continue
+
+        # Extract |team1=... and |team2=...
+        t1_m = re.search(r"\|\s*team1\s*=\s*([^\n|]+)", content)
+        t2_m = re.search(r"\|\s*team2\s*=\s*([^\n|]+)", content)
+        if not t1_m or not t2_m:
+            continue
+
+        home = _extract_wikitext_team(t1_m.group(1))
+        away = _extract_wikitext_team(t2_m.group(1))
+        if not home or not away:
+            continue
+
+        results.append(
+            {
+                "home": home,
+                "away": away,
+                "home_score": int(score_m.group(1)),
+                "away_score": int(score_m.group(2)),
+            }
+        )
+
+    return results
+
+
+def verify_knockout_scores() -> list[str]:
+    """Cross-check WC 2026 knockout scores in results.csv against Wikipedia.
+
+    Returns a list of human-readable warning strings for any score that
+    does not match. Returns an empty list if no mismatches are found *or* if
+    Wikipedia is unreachable / unparseable (so callers never have to handle
+    exceptions).
+    """
+    wiki = fetch_wikipedia_knockout_results()
+    if not wiki:
+        return []
+
+    # Build a team-pair → (home_score, away_score, home_name) lookup
+    wiki_by_pair: dict[frozenset[str], tuple[int, int, str]] = {}
+    for r in wiki:
+        wiki_by_pair[frozenset([r["home"], r["away"]])] = (
+            r["home_score"],
+            r["away_score"],
+            r["home"],
+        )
+
+    df = pd.read_csv(DATA_DIR / "results.csv")
+    knockout = df[
+        (df["tournament"] == "FIFA World Cup")
+        & (df["date"].astype(str).str.startswith("2026"))
+        & df["round"].notna()
+        & ~df["round"].isin(["", "group"])
+        & df["home_score"].notna()
+        & df["away_score"].notna()
+    ]
+
+    warnings: list[str] = []
+    for _, row in knockout.iterrows():
+        h = RESULTS_TO_CANONICAL.get(str(row["home_team"]), str(row["home_team"]))
+        a = RESULTS_TO_CANONICAL.get(str(row["away_team"]), str(row["away_team"]))
+        key = frozenset([h, a])
+        if key not in wiki_by_pair:
+            continue
+        w_hs, w_as, w_home = wiki_by_pair[key]
+        csv_hs, csv_as = int(row["home_score"]), int(row["away_score"])
+        # Normalise to CSV home/away order for comparison
+        if h == w_home:
+            exp_h, exp_a = w_hs, w_as
+        else:
+            exp_h, exp_a = w_as, w_hs
+        if csv_hs != exp_h or csv_as != exp_a:
+            warnings.append(
+                f"{h} {csv_hs}–{csv_as} {a}  ←  results.csv; Wikipedia shows {exp_h}–{exp_a}"
+            )
+
+    return warnings
