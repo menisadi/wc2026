@@ -1313,6 +1313,120 @@ class EloThresholdWalkPredictor:
         self._ratings[away] = ra - delta
 
 
+class DoubleThresholdWalkPredictor:
+    """ELO-threshold predictor with two margin thresholds (200 and 400 points).
+
+    diff >= 400 → 3-0, >= 200 → 2-0, >= 0 → 1-0 (mirrored for away wins).
+    Never predicts draws. Updates ELO live after each match.
+    """
+
+    name = "elo-double-threshold"
+    is_sequential: bool = True
+    _LOW: int = 200
+    _HIGH: int = 400
+    _SNAPSHOT = "2026-05-27"
+    _DATA_RAW = Path(__file__).parents[3] / "data" / "raw"
+    _ELO_TO_CANONICAL: dict[str, str] = {
+        "Czechia": "Czech Republic",
+        "Cape Verde Islands": "Cape Verde",
+    }
+
+    def __init__(self) -> None:
+        self._ratings: dict[str, float] = {}
+        self._fallback: float = 1500.0
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        if year_cutoff == 2026:
+            snap_path = self._DATA_RAW / "elo_ratings_wc2026.csv"
+            if snap_path.exists():
+                df = pd.read_csv(snap_path)
+                snap = df[df["snapshot_date"] == self._SNAPSHOT]
+                if not snap.empty:
+                    self._ratings = {
+                        self._ELO_TO_CANONICAL.get(str(c), str(c)): float(r)
+                        for c, r in zip(snap["country"], snap["rating"])
+                    }
+                    self._fallback = float(np.median(list(self._ratings.values())))
+                    return
+        if elo_history is None or elo_history.empty:
+            return
+        past = elo_history[elo_history["year"] < year_cutoff]
+        if past.empty:
+            return
+        latest = past.sort_values("year").drop_duplicates("country", keep="last")
+        self._ratings = {str(c): float(r) for c, r in zip(latest["country"], latest["rating"])}
+        self._fallback = float(np.median(list(self._ratings.values())))
+
+    def _resolve(self, name: str) -> str:
+        if name in self._ratings:
+            return name
+        lower = name.lower()
+        exact = [t for t in self._ratings if t.lower() == lower]
+        if exact:
+            return exact[0]
+        close = [t for t in self._ratings if lower in t.lower() or t.lower() in lower]
+        return close[0] if close else name
+
+    def _predict_one(self, home: str, away: str) -> tuple[int, int]:
+        h_rating = self._ratings.get(home, self._fallback)
+        a_rating = self._ratings.get(away, self._fallback)
+        diff = h_rating - a_rating
+        if diff >= self._HIGH:
+            return 3, 0
+        if diff >= self._LOW:
+            return 2, 0
+        if diff >= 0:
+            return 1, 0
+        if abs(diff) >= self._HIGH:
+            return 0, 3
+        if abs(diff) >= self._LOW:
+            return 0, 2
+        return 0, 1
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        return np.full((len(matches), 3), 1.0 / 3.0)
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return None
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        scores = []
+        for _, row in matches.iterrows():
+            home = self._resolve(str(row["home_team"]))
+            away = self._resolve(str(row["away_team"]))
+            scores.append(self._predict_one(home, away))
+        return np.array(scores, dtype=int)
+
+    def update(self, match_row: pd.Series) -> None:
+        from wc2026.data.elo import HOME_ADVANTAGE, _goal_diff_multiplier, k_value
+
+        home = self._resolve(str(match_row["home_team"]))
+        away = self._resolve(str(match_row["away_team"]))
+        gh = int(match_row["home_score"])
+        ga = int(match_row["away_score"])
+        neutral = bool(match_row["neutral"])
+        tournament = str(match_row.get("tournament", ""))
+
+        rh = self._ratings.get(home, self._fallback)
+        ra = self._ratings.get(away, self._fallback)
+        home_adv = 0.0 if neutral else HOME_ADVANTAGE
+        dr = (rh + home_adv) - ra
+        we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
+        w_h = 1.0 if gh > ga else (0.5 if gh == ga else 0.0)
+        delta = k_value(tournament) * _goal_diff_multiplier(gh - ga) * (w_h - we_h)
+        self._ratings[home] = rh + delta
+        self._ratings[away] = ra - delta
+
+
 def _modal_in_class(xg_h: float, xg_a: float, outcome: int, max_goals: int = 10) -> tuple[int, int]:
     """Return the highest-probability score (h, a) that belongs to *outcome*.
 
@@ -1389,14 +1503,14 @@ class BestEvPredictor:
 
     For each of the 3 outcome classes, finds its modal score (highest P within
     that class), computes its EV, and returns the score with the highest EV.
-    Wraps PoissonPredictor(use_elo=True).
+    Wraps PoissonPredictor; use_elo controls whether ELO features are used.
     """
 
-    name = "poisson-best-ev"
     is_sequential: bool = True
 
-    def __init__(self) -> None:
-        self._base = PoissonPredictor(use_elo=True)
+    def __init__(self, use_elo: bool = True) -> None:
+        self.name = "poisson-best-ev" if use_elo else "poisson-best-ev-no-elo"
+        self._base = PoissonPredictor(use_elo=use_elo)
 
     def fit(
         self,
@@ -1455,10 +1569,12 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "skellam": SkellamPredictor(),
         "elo-threshold": EloThresholdPredictor(),
         "elo-threshold-live": EloThresholdWalkPredictor(),
+        "elo-double-threshold": DoubleThresholdWalkPredictor(),
         "uniform-goals": UniformGoalsPredictor(),
         "poisson-sample": PoissonDrawPredictor(),
         "poisson-outcome-first": OutcomeFirstPredictor(),
-        "poisson-best-ev": BestEvPredictor(),
+        "poisson-best-ev": BestEvPredictor(use_elo=True),
+        "poisson-best-ev-no-elo": BestEvPredictor(use_elo=False),
     }
     out: list[Predictor] = []
     for n in names:
