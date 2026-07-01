@@ -836,6 +836,7 @@ def walk_forward(
     tournaments_only: bool = False,
     progress: Callable[[str], None] | None = None,
     elo_by_match: pd.DataFrame | None = None,
+    per_game_refit: bool = False,
 ) -> BacktestResult:
     """Yearly walk-forward over `since_year..max(year)`.
 
@@ -900,6 +901,60 @@ def walk_forward(
         )
 
         for p in predictors:
+            if per_game_refit and not getattr(p, "is_static", False):
+                if progress is not None:
+                    progress(f"{p.name}: per-game refit, {y} ({len(test)} matches)")
+                update_fn = getattr(p, "update", None)
+                test_sorted = test.sort_values("date").reset_index(drop=True)
+                for i, (_, m) in enumerate(test_sorted.iterrows()):
+                    game_train = df[df["date"] < m["date"]].drop(columns="year")
+                    if game_train.empty:
+                        continue
+                    p.fit(game_train, elo_history, half_life, y)
+                    # Replay all prior in-year matches to restore live ELO at
+                    # predict-time (without this, fit() resets ELO to the
+                    # pre-year snapshot and sequential updates are lost).
+                    if update_fn is not None:
+                        for _, prior_m in year_all[year_all["date"] < m["date"]].iterrows():
+                            update_fn(prior_m)
+                    row_df = test_sorted.iloc[[i]]
+                    probs_i = p.predict_proba(row_df)
+                    xgs_i = p.predict_xg(row_df)
+                    score_lls_i = p.predict_score_ll(row_df)
+                    modal_scores_i = p.predict_modal_score(row_df)
+                    rows.append(
+                        {
+                            "predictor": p.name,
+                            "year": y,
+                            "date": m["date"],
+                            "home_team": m["home_team"],
+                            "away_team": m["away_team"],
+                            "neutral": bool(m["neutral"]),
+                            "tournament": str(m.get("tournament", "")),
+                            "round": str(m.get("round", "")),
+                            "p_home": float(probs_i[0, 0]),
+                            "p_draw": float(probs_i[0, 1]),
+                            "p_away": float(probs_i[0, 2]),
+                            "outcome": outcome_from_score(
+                                int(m["home_score"]), int(m["away_score"])
+                            ),
+                            "home_goals": int(m["home_score"]),
+                            "away_goals": int(m["away_score"]),
+                            "xg_home": float(xgs_i[0, 0]) if xgs_i is not None else float("nan"),
+                            "xg_away": float(xgs_i[0, 1]) if xgs_i is not None else float("nan"),
+                            "score_ll": float(score_lls_i[0])
+                            if score_lls_i is not None
+                            else float("nan"),
+                            "modal_h": int(modal_scores_i[0, 0])
+                            if modal_scores_i is not None
+                            else -1,
+                            "modal_a": int(modal_scores_i[0, 1])
+                            if modal_scores_i is not None
+                            else -1,
+                        }
+                    )
+                continue
+
             if progress is not None:
                 progress(f"{p.name}: fit < {y}, predict {y} ({len(test)} matches)")
             p.fit(train, elo_history, half_life, y)
@@ -990,6 +1045,7 @@ class EloThresholdPredictor:
     """
 
     name = "elo-threshold"
+    is_static: bool = True  # uses a fixed pre-tournament snapshot; skip per-game refit
     _SNAPSHOT = "2026-05-27"
     _THRESHOLD = 250
     _DATA_RAW = Path(__file__).parents[3] / "data" / "raw"

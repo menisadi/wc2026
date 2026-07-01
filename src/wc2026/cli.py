@@ -744,6 +744,11 @@ def betting_backtest(
     ),
     csv: bool = typer.Option(False, "--csv", help="Output as CSV."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress progress messages."),
+    per_game_refit: bool = typer.Option(
+        False,
+        "--per-game-refit",
+        help="Refit each predictor on all data before each game (slower, more realistic).",
+    ),
 ) -> None:
     """Score predictors with the 3/1/0 betting rule on their modal score predictions."""
     from wc2026.data.elo import (
@@ -778,6 +783,7 @@ def betting_backtest(
         tournaments_only=tournaments_only,
         progress=progress,
         elo_by_match=elo_by_match,
+        per_game_refit=per_game_refit,
     )
 
     score_rows: list[tuple[str, int, int, int, int, int]] = []
