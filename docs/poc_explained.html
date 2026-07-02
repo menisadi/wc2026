@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WC 2026 Predictor — Models &amp; Logic</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --panel-2: #1e2230;
+    --ink: #e6e8ee;
+    --muted: #9aa3b2;
+    --accent: #5b9dff;
+    --accent-2: #54d6a0;
+    --warn: #f0a45b;
+    --border: #2a3040;
+    --code-bg: #0b0d13;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 40px; }
+  h1 { font-size: 30px; margin: 0 0 8px; letter-spacing: -0.02em; }
+  header p { color: var(--muted); margin: 0; }
+  h2 {
+    font-size: 22px; margin: 48px 0 14px; padding-top: 8px;
+    border-top: 1px solid var(--border); letter-spacing: -0.01em;
+  }
+  h2 .tag {
+    font-size: 12px; font-weight: 600; color: var(--accent);
+    background: rgba(91,157,255,0.12); padding: 2px 8px; border-radius: 6px;
+    vertical-align: middle; margin-left: 8px; letter-spacing: 0;
+  }
+  h3 { font-size: 16px; margin: 28px 0 8px; color: var(--accent-2); }
+  p { margin: 12px 0; }
+  code {
+    font-family: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+    font-size: 0.88em; background: var(--code-bg); padding: 1px 6px;
+    border-radius: 5px; border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; overflow-x: auto;
+    font-family: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+    font-size: 13px; line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  .kw { color: #c191ff; }
+  .fn { color: #5b9dff; }
+  .num { color: #f0a45b; }
+  .str { color: #54d6a0; }
+  .com { color: #6b7385; font-style: italic; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 4px 22px; margin: 18px 0;
+  }
+  .formula {
+    background: var(--panel-2); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 14px 20px; margin: 18px 0;
+    font-family: "SF Mono", ui-monospace, monospace; font-size: 15px;
+    overflow-x: auto;
+  }
+  .note {
+    border-left: 3px solid var(--warn); background: rgba(240,164,91,0.08);
+    padding: 2px 18px; margin: 18px 0; border-radius: 0 8px 8px 0;
+  }
+  .note strong { color: var(--warn); }
+  ul, ol { padding-left: 22px; }
+  li { margin: 6px 0; }
+  .muted { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  th { background: var(--panel-2); color: var(--accent); font-weight: 600; }
+  .sub { font-size: 0.7em; vertical-align: sub; }
+  .flow {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin: 18px 0; font-size: 14px;
+  }
+  .flow .step {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; white-space: nowrap;
+  }
+  .flow .arrow { color: var(--accent); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>WC 2026 Winner Predictor</h1>
+  <p>How the statistical model and simulation logic work — <code>poc.py</code></p>
+</header>
+
+<p>
+  The predictor answers one question: <em>given every team's playing strength, how
+  often does each team win the tournament?</em> It does this in two layers:
+</p>
+<ol>
+  <li><strong>A scoring model</strong> that turns any pairing of two teams into an
+      expected number of goals for each side.</li>
+  <li><strong>A Monte&nbsp;Carlo simulator</strong> that plays the whole tournament
+      thousands of times using that model, then counts how often each team lifts the trophy.</li>
+</ol>
+<p class="muted">
+  This document covers only the modelling and match logic. Data loading, name
+  normalization, and bracket plumbing are deliberately left out.
+</p>
+
+<!-- ───────────────────────────── MODEL ───────────────────────────── -->
+<h2>1. The scoring model<span class="tag">PoissonModel</span></h2>
+
+<p>
+  Goals in football are well-described by a <strong>Poisson distribution</strong>: rare,
+  independent events occurring at some average rate over 90 minutes. The whole model
+  reduces to estimating that rate — the <em>expected goals</em> (xG) — for each side of a
+  match. Once we have a rate <code>λ</code>, an actual scoreline is just a random draw
+  from <code>Poisson(λ)</code>.
+</p>
+
+<h3>The core equation</h3>
+<p>
+  Each team gets two latent numbers learned from history: an <strong>attack</strong>
+  strength and a <strong>defense</strong> strength. The expected goals for team
+  <code>A</code> against team <code>B</code> combine A's attack with B's defense, plus a
+  shared baseline and a home-advantage term:
+</p>
+
+<div class="formula">
+  λ<sub>A</sub> = exp( intercept + attack<sub>A</sub> + defense<sub>B</sub> + home_adv + elo_term<sub>A</sub> )
+</div>
+
+<p>
+  The <code>exp(...)</code> guarantees the rate is always positive, and it makes the
+  effects multiplicative: a strong attack and a weak opposing defense compound rather
+  than merely add. This is the standard log-linear form of a Poisson regression.
+</p>
+
+<h3>Fitting attack &amp; defense (the design matrix)</h3>
+<p>
+  Every historical match becomes <strong>two training rows</strong> — one per direction —
+  so a single 2–1 result teaches the model both "A scored 2 against B's defense" and
+  "B scored 1 against A's defense." The features are one-hot indicators selecting which
+  team's attack and which team's defense are active:
+</p>
+
+<pre><code><span class="com"># Design matrix layout (one row = one team's scoring in one match):</span>
+<span class="com">#  [ attack_0 … attack_{n-1} | defense_0 … defense_{n-1} | home_adv | scorer_z | conceder_z ]</span>
+
+X[<span class="num">2</span>*i,     hi]      = <span class="num">1</span>   <span class="com"># home team's attack is "on"</span>
+X[<span class="num">2</span>*i, n + ai]      = <span class="num">1</span>   <span class="com"># away team's defense is "on"</span>
+X[<span class="num">2</span>*i, <span class="num">2</span>*n]       = <span class="num">1</span>   <span class="com"># home advantage (0 if neutral venue)</span>
+y[<span class="num">2</span>*i]               = home_score</code></pre>
+
+<p>
+  <code>PoissonRegressor</code> then finds the attack/defense coefficients (plus
+  intercept and home-advantage) that best explain all those goal counts. A small
+  <code>alpha=0.01</code> ridge penalty keeps the coefficients stable for teams with few
+  matches.
+</p>
+
+<h3>Recency weighting</h3>
+<p>
+  A result from 2011 should count for less than one from last month. Each match is
+  weighted by an exponential decay based on its age, controlled by a
+  <strong>half-life</strong> (default 3 years — a match that old counts half as much as a
+  brand-new one):
+</p>
+
+<div class="formula">
+  weight = exp( −ln(2) · age_days / (half_life · 365.25) )
+</div>
+
+<p>These weights are passed straight into the regression as <code>sample_weight</code>.</p>
+
+<h3>The ELO bridge (cross-tier calibration)</h3>
+<div class="panel">
+<p>
+  Pure attack/defense coefficients have a blind spot: a minnow that only ever plays other
+  minnows looks "average" in its own little pool, because the model has no anchor tying
+  the pools together. The World Cup mixes tiers that rarely meet, so this matters.
+</p>
+<p>
+  The fix is two extra <strong>global</strong> features built from each team's ELO rating,
+  standardized to z-scores (<code>scorer_z</code>, <code>conceder_z</code>). They inject a
+  universal strength scale that every match shares, so a team's coefficients are
+  calibrated against the entire population, not just its usual opponents.
+</p>
+</div>
+<p>When ELO is active, the xG expression gains a symmetric strength term:</p>
+<div class="formula">
+  elo_term<sub>A</sub> = elo_atk · z<sub>A</sub> + elo_def · z<sub>B</sub>
+</div>
+<p>
+  Higher own-rating (<code>z<sub>A</sub></code>) lifts A's expected goals; a stronger
+  opponent (<code>z<sub>B</sub></code>) is folded in via the defense coefficient.
+</p>
+
+<h3>Unknown teams &amp; fallbacks</h3>
+<ul>
+  <li>If a team <em>appears</em> in training, its fitted attack/defense are used directly.</li>
+  <li>If it doesn't but the <strong>ELO feature is active</strong>, its attack/defense
+      default to <code>0</code> — the ELO z-score term alone then carries its strength.</li>
+  <li>If ELO is off entirely, an unknown team falls back to a rough estimate derived from
+      how far its ELO sits from the mean.</li>
+</ul>
+
+<h3>From rates to a scoreline</h3>
+<p>
+  <code>xg(a, b)</code> returns the two expected-goal rates; <code>play(a, b)</code> draws
+  the actual integer scoreline from independent Poisson distributions:
+</p>
+<pre><code><span class="kw">def</span> <span class="fn">play</span>(self, a, b, rng):
+    xa, xb = self.<span class="fn">xg</span>(a, b)
+    <span class="kw">return</span> <span class="fn">int</span>(rng.<span class="fn">poisson</span>(xa)), <span class="fn">int</span>(rng.<span class="fn">poisson</span>(xb))</code></pre>
+
+<!-- ───────────────────────────── MATCH LOGIC ───────────────────────────── -->
+<h2>2. Match &amp; knockout logic</h2>
+
+<h3>Group matches</h3>
+<p>
+  Every team in a group plays every other once. Each match is either a real result (if
+  already played) or simulated via <code>model.play</code>. Standard points apply — 3 for
+  a win, 1 each for a draw — and teams are ranked by
+  <code>(points, goal difference, goals for)</code>.
+</p>
+
+<h3>Knockout matches — extra time, no penalties</h3>
+<div class="panel">
+<p>
+  Knockouts can't end level. The model plays 90 minutes first; if the score is tied, it
+  simulates <strong>30 minutes of extra time</strong>. Because goals scale with time,
+  extra time uses the same xG rates scaled down to <code>30/90 ≈ 0.33</code> of the
+  regulation rate:
+</p>
+<pre><code><span class="kw">def</span> <span class="fn">play_knockout</span>(model, a, b, rng):
+    ga, gb = model.<span class="fn">play</span>(a, b, rng)        <span class="com"># 90 minutes</span>
+    <span class="kw">if</span> ga == gb:                          <span class="com"># still level → extra time</span>
+        xa, xb = model.<span class="fn">xg</span>(a, b)
+        ga += <span class="fn">int</span>(rng.<span class="fn">poisson</span>(xa * ET_GOALS_FRACTION))
+        gb += <span class="fn">int</span>(rng.<span class="fn">poisson</span>(xb * ET_GOALS_FRACTION))
+    <span class="kw">return</span> ga, gb</code></pre>
+</div>
+<div class="note">
+  <p>
+    <strong>Penalties are deliberately excluded from the scoreline.</strong> If the match
+    is <em>still</em> tied after extra time, the winner is decided by a <code>50/50</code>
+    coin flip — the shootout advances a team but does not add goals. This matches the
+    league's scoring rule, where knockout results are counted after 120 minutes excluding
+    penalties.
+  </p>
+</div>
+
+<!-- ───────────────────────────── MONTE CARLO ───────────────────────────── -->
+<h2>3. Monte Carlo simulation</h2>
+<p>
+  One simulated tournament is a single random outcome — useless on its own. The power
+  comes from running it <strong>thousands of times</strong> (default 10,000) and treating
+  the frequency of each champion as its win probability.
+</p>
+
+<div class="flow">
+  <span class="step">Groups</span><span class="arrow">→</span>
+  <span class="step">R32</span><span class="arrow">→</span>
+  <span class="step">R16</span><span class="arrow">→</span>
+  <span class="step">QF</span><span class="arrow">→</span>
+  <span class="step">SF</span><span class="arrow">→</span>
+  <span class="step">Final</span><span class="arrow">→</span>
+  <span class="step">🏆 1 champion</span>
+</div>
+
+<p>
+  Each full run threads one random-number generator through every match, so the whole
+  tournament is internally consistent. The main loop simply tallies champions:
+</p>
+<pre><code>wins = <span class="fn">Counter</span>(
+    <span class="fn">sim_tournament</span>(groups, model, rng, actual, r32_override=r32)
+    <span class="kw">for</span> _ <span class="kw">in</span> <span class="fn">range</span>(args.sims)
+)
+<span class="com"># win probability = wins[team] / total_sims</span></code></pre>
+
+<p>
+  Already-played matches are pinned to their real results (the <code>actual</code> map),
+  so the simulation only randomizes the <em>future</em>. A fixed <code>--seed</code> makes
+  any run reproducible.
+</p>
+
+<h3>Why this design holds together</h3>
+<table>
+  <tr><th>Choice</th><th>Why it matters</th></tr>
+  <tr><td>Poisson on goals</td><td>Matches how scoring actually behaves; gives full scorelines, not just win/draw/loss.</td></tr>
+  <tr><td>Attack × defense split</td><td>Separates "scores a lot" from "concedes a lot" — the two are independent skills.</td></tr>
+  <tr><td>Recency half-life</td><td>Recent form outweighs stale results without throwing old data away entirely.</td></tr>
+  <tr><td>ELO z-score features</td><td>Calibrates strength across tiers that rarely play each other.</td></tr>
+  <tr><td>Monte Carlo</td><td>Turns a noisy single outcome into stable probabilities over many runs.</td></tr>
+</table>
+
+</div>
+</body>
+</html>

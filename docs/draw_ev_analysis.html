@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Draw EV Analysis — Scoreline Prediction Game</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+    /* Slider styling */
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 6px;
+      border-radius: 3px;
+      background: #334155;
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #6366f1;
+      cursor: pointer;
+      border: 2px solid #818cf8;
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #6366f1;
+      cursor: pointer;
+      border: 2px solid #818cf8;
+    }
+
+    /* Formula box */
+    .formula-box {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+    }
+
+    /* Fade-in animation for verdict */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeIn 0.2s ease; }
+
+    /* Section dividers */
+    .section-rule {
+      border-top: 1px solid #1e293b;
+      margin: 0 auto;
+      max-width: 56rem;
+    }
+  </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+
+  <!-- ═══════════════════════════════════════════════════════
+       1. HERO
+  ══════════════════════════════════════════════════════════ -->
+  <header class="max-w-4xl mx-auto px-6 pt-16 pb-10">
+    <div class="inline-block bg-indigo-950 border border-indigo-700 text-indigo-300 text-xs font-semibold tracking-widest uppercase px-3 py-1 rounded-full mb-6">
+      Probabilistic Analysis · ML Team Internal
+    </div>
+    <h1 class="text-4xl sm:text-5xl font-bold tracking-tight text-white leading-tight mb-4">
+      When Is Betting on a Draw<br class="hidden sm:block" />
+      the Best EV Scoreline?
+    </h1>
+    <p class="text-slate-400 text-lg max-w-2xl leading-relaxed">
+      A Poisson-based expected-value decomposition showing that draw scorelines
+      are structurally disadvantaged in the scoring system — and the narrow
+      regime (λ ≲ 0.95, p<sub>draw</sub> ≳ 0.32) where they finally win.
+    </p>
+    <div class="mt-8 flex flex-wrap gap-4 text-sm text-slate-400">
+      <span class="bg-slate-800 rounded px-3 py-1">1,209 matches backtested</span>
+      <span class="bg-slate-800 rounded px-3 py-1">0.3% draw-optimal rate</span>
+      <span class="bg-slate-800 rounded px-3 py-1">Crossover at λ ≈ 0.95</span>
+      <span class="bg-slate-800 rounded px-3 py-1">4.1pp KO calibration gap</span>
+    </div>
+  </header>
+
+  <div class="section-rule"></div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       2. SCORING SYSTEM & EV FORMULA
+  ══════════════════════════════════════════════════════════ -->
+  <section class="max-w-4xl mx-auto px-6 py-12">
+    <h2 class="text-2xl font-bold text-white mb-2">Scoring System &amp; EV Formula</h2>
+    <p class="text-slate-400 mb-8 text-sm">
+      Players submit an exact scoreline before each match. Points are awarded as follows.
+    </p>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
+      <!-- Points card -->
+      <div class="bg-slate-900 rounded-xl border border-slate-800 p-6">
+        <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Point Structure</h3>
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-slate-300">Exact scoreline</span>
+            <span class="text-2xl font-bold text-emerald-400">3 pts</span>
+          </div>
+          <div class="w-full h-px bg-slate-800"></div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-300">Correct direction (W/D/L)<br/><span class="text-xs text-slate-500">wrong score</span></span>
+            <span class="text-2xl font-bold text-sky-400">1 pt</span>
+          </div>
+          <div class="w-full h-px bg-slate-800"></div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-300">Wrong direction</span>
+            <span class="text-2xl font-bold text-slate-500">0 pts</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Formula card -->
+      <div class="bg-slate-900 rounded-xl border border-slate-800 p-6">
+        <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Expected-Value Formula</h3>
+        <div class="formula-box text-slate-200 text-sm leading-loose">
+          <div class="text-center text-base font-semibold text-white mb-3">
+            EV(g<sub>a</sub>–g<sub>b</sub>) = p<sub>dir</sub> + 2 × p<sub>exact</sub>
+          </div>
+          <p class="text-xs text-slate-400 mb-2">
+            This follows directly from the scoring rule: 1 pt if direction is correct, plus an extra 2 pts if exact.
+          </p>
+          <div class="border-t border-slate-700 pt-3 mt-3 space-y-1 text-xs text-slate-300">
+            <div><strong class="text-slate-200">p<sub>dir</sub></strong> = p<sub>home</sub> if g<sub>a</sub> &gt; g<sub>b</sub>, &nbsp;p<sub>draw</sub> if g<sub>a</sub> = g<sub>b</sub>, &nbsp;p<sub>away</sub> if g<sub>a</sub> &lt; g<sub>b</sub></div>
+            <div><strong class="text-slate-200">p<sub>exact</sub></strong> = P(G<sub>A</sub>=g<sub>a</sub> | λ<sub>a</sub>) × P(G<sub>B</sub>=g<sub>b</sub> | λ<sub>b</sub>)</div>
+            <div class="pt-2">G<sub>A</sub>, G<sub>B</sub> ~ Poisson(λ<sub>a</sub>), Poisson(λ<sub>b</sub>) independent</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Structural bias callout -->
+    <div class="bg-amber-950 border border-amber-800 rounded-xl p-5">
+      <h3 class="text-amber-300 font-semibold mb-2">Structural Bias Against Draws</h3>
+      <p class="text-amber-100 text-sm leading-relaxed">
+        The direction bonus term p<sub>dir</sub> always punishes draw predictions because
+        p<sub>draw</sub> ≈ 25–30% sits well below p<sub>home win</sub> ≈ 40–50% in most matches.
+        Even when 1–1 and 1–0 share identical p<sub>exact</sub>, the 1–0 prediction dominates
+        on EV: its direction bonus is ≈15–20pp higher. A draw scoreline must compensate
+        with a substantially higher p<sub>exact</sub>, which only occurs at very low λ.
+      </p>
+    </div>
+  </section>
+
+  <div class="section-rule"></div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       3. INTERACTIVE MATCH ANALYZER
+  ══════════════════════════════════════════════════════════ -->
+  <section class="max-w-4xl mx-auto px-6 py-12">
+    <h2 class="text-2xl font-bold text-white mb-2">Interactive Match Analyzer</h2>
+    <p class="text-slate-400 text-sm mb-8">
+      Adjust the Poisson rate parameters (xG estimates) and see live EV rankings across all scorelines.
+    </p>
+
+    <!-- Sliders -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
+      <div class="bg-slate-900 rounded-xl border border-slate-800 p-5">
+        <div class="flex justify-between items-center mb-3">
+          <label class="text-sm font-medium text-slate-300">
+            λ<sub>home</sub> — Home team xG rate
+          </label>
+          <span id="la-display" class="text-lg font-bold text-indigo-400">1.40</span>
+        </div>
+        <input id="la-slider" type="range" min="0.3" max="2.5" step="0.05" value="1.4"
+               class="w-full" />
+        <div class="flex justify-between text-xs text-slate-600 mt-1">
+          <span>0.30</span><span>2.50</span>
+        </div>
+      </div>
+      <div class="bg-slate-900 rounded-xl border border-slate-800 p-5">
+        <div class="flex justify-between items-center mb-3">
+          <label class="text-sm font-medium text-slate-300">
+            λ<sub>away</sub> — Away team xG rate
+          </label>
+          <span id="lb-display" class="text-lg font-bold text-indigo-400">1.10</span>
+        </div>
+        <input id="lb-slider" type="range" min="0.3" max="2.5" step="0.05" value="1.1"
+               class="w-full" />
+        <div class="flex justify-between text-xs text-slate-600 mt-1">
+          <span>0.30</span><span>2.50</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Probabilities + verdict -->
+    <div class="flex flex-wrap gap-3 mb-6 items-center">
+      <span class="text-sm text-slate-500 mr-1">Match probabilities:</span>
+      <span id="p-home-badge"
+            class="bg-sky-900 border border-sky-700 text-sky-200 text-sm font-mono px-3 py-1 rounded-full">
+        Home win: —
+      </span>
+      <span id="p-draw-badge"
+            class="bg-amber-900 border border-amber-700 text-amber-200 text-sm font-mono px-3 py-1 rounded-full">
+        Draw: —
+      </span>
+      <span id="p-away-badge"
+            class="bg-rose-900 border border-rose-700 text-rose-200 text-sm font-mono px-3 py-1 rounded-full">
+        Away win: —
+      </span>
+    </div>
+
+    <!-- Verdict -->
+    <div id="verdict-container" class="mb-8">
+      <!-- injected by JS -->
+    </div>
+
+    <!-- Chart -->
+    <div class="bg-slate-900 rounded-xl border border-slate-800 p-5">
+      <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">
+        Top 8 Scorelines by EV
+        <span class="ml-2 font-normal text-slate-600 normal-case tracking-normal">
+          — blue = home win, amber = draw, rose = away win
+        </span>
+      </h3>
+      <div style="height: 300px; position: relative;">
+        <canvas id="ev-chart"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <div class="section-rule"></div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       4. THE BOUNDARY REGION
+  ══════════════════════════════════════════════════════════ -->
+  <section class="max-w-4xl mx-auto px-6 py-12">
+    <h2 class="text-2xl font-bold text-white mb-2">The Boundary Region</h2>
+    <p class="text-slate-400 text-sm mb-8">
+      Symmetric case (λ<sub>a</sub> = λ<sub>b</sub> = λ). The chart plots two curves: the
+      minimum p<sub>draw</sub> required for a draw scoreline to be best EV, and the
+      p<sub>draw</sub> that symmetric Poisson actually implies.
+    </p>
+
+    <div class="bg-slate-900 rounded-xl border border-slate-800 p-5 mb-6">
+      <div style="height: 320px; position: relative;">
+        <canvas id="boundary-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- Boundary condition derivation -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <div class="bg-slate-900 rounded-xl border border-slate-800 p-5">
+        <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Boundary Condition</h3>
+        <div class="formula-box text-sm text-slate-300 leading-loose">
+          <div class="text-center text-white mb-2">
+            p<sub>draw</sub> &gt; ⅓ + (4/3) × [P(best<sub>win</sub>) − P(best<sub>draw</sub>)]
+          </div>
+          <div class="text-xs text-slate-400 border-t border-slate-700 pt-3 space-y-1">
+            <div><strong>λ ≤ 1:</strong> best<sub>draw</sub> = 0–0 &nbsp;(e<sup>−2λ</sup>),&nbsp; best<sub>win</sub> = 1–0 &nbsp;(λ e<sup>−2λ</sup>)</div>
+            <div><strong>λ &gt; 1:</strong> best<sub>draw</sub> = 1–1 &nbsp;(λ²e<sup>−2λ</sup>),&nbsp; best<sub>win</sub> = 1–0 or 2–1</div>
+            <div class="pt-2 text-slate-300">Crossover: λ ≈ <strong>0.95</strong></div>
+          </div>
+        </div>
+      </div>
+      <div class="bg-slate-900 rounded-xl border border-slate-800 p-5">
+        <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Interpretation</h3>
+        <p class="text-sm text-slate-300 leading-relaxed">
+          The draw-optimal regime (shaded green) is narrow. Both conditions must hold simultaneously:
+          the xG rates must be low enough that draw scorelines have higher p<sub>exact</sub>
+          relative to win scorelines, <em>and</em> the match must genuinely be likely to be a draw.
+        </p>
+        <p class="text-sm text-slate-400 mt-3 leading-relaxed">
+          In practice, p<sub>draw</sub> rarely exceeds 0.33 in Poisson models unless both
+          λ &lt; 1.0 — but then the Poisson-implied p<sub>draw</sub> curve barely crosses the
+          boundary threshold, making the feasible region extremely thin.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <div class="section-rule"></div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       5. EMPIRICAL FINDINGS
+  ══════════════════════════════════════════════════════════ -->
+  <section class="max-w-4xl mx-auto px-6 py-12">
+    <h2 class="text-2xl font-bold text-white mb-2">Empirical Findings</h2>
+    <p class="text-slate-400 text-sm mb-8">
+      Walk-forward backtest on 1,209 major neutral-venue matches (2010–present). The model
+      was never told the match stage; predictions are purely Poisson from team strength estimates.
+    </p>
+
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-8">
+      <!-- Stat card -->
+      <div class="sm:col-span-1 bg-slate-900 rounded-xl border border-slate-800 p-6 flex flex-col justify-center items-center text-center">
+        <div class="text-5xl font-black text-indigo-400 mb-2">0.3%</div>
+        <div class="text-slate-400 text-sm">of 1,209 matches had<br/>draw as best-EV bet</div>
+        <div class="mt-4 text-slate-500 text-xs">4 matches total · all 0–0 predictions</div>
+      </div>
+
+      <!-- Scoreline frequency table -->
+      <div class="sm:col-span-2 bg-slate-900 rounded-xl border border-slate-800 p-5">
+        <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
+          Scoreline Frequencies — Major Neutral Matches (2000+)
+        </h3>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-slate-500 text-xs border-b border-slate-800">
+              <th class="text-left pb-2">Scoreline</th>
+              <th class="text-right pb-2">Freq.</th>
+              <th class="text-left pb-2 pl-3">Direction</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-2 font-mono text-slate-200">1–0</td>
+              <td class="py-2 text-right font-semibold text-sky-400">11.5%</td>
+              <td class="py-2 pl-3 text-xs text-sky-600">Home win</td>
+            </tr>
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-2 font-mono text-slate-200">1–1</td>
+              <td class="py-2 text-right font-semibold text-amber-400">11.4%</td>
+              <td class="py-2 pl-3 text-xs text-amber-600">Draw ← tied most common</td>
+            </tr>
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-2 font-mono text-slate-200">0–1</td>
+              <td class="py-2 text-right font-semibold text-rose-400">10.2%</td>
+              <td class="py-2 pl-3 text-xs text-rose-600">Away win</td>
+            </tr>
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-2 font-mono text-slate-200">0–0</td>
+              <td class="py-2 text-right font-semibold text-amber-400">9.5%</td>
+              <td class="py-2 pl-3 text-xs text-amber-600">Draw</td>
+            </tr>
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-2 font-mono text-slate-200">2–1</td>
+              <td class="py-2 text-right font-semibold text-sky-400">8.4%</td>
+              <td class="py-2 pl-3 text-xs text-sky-600">Home win</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="text-xs text-slate-500 mt-3">
+          1–1 is essentially tied with 1–0 as the most common scoreline — yet 1–0 wins on EV
+          because its p<sub>dir</sub> is ~15–20pp higher than p<sub>draw</sub>.
+        </p>
+      </div>
+    </div>
+
+    <!-- The 4 matches -->
+    <div class="bg-slate-900 rounded-xl border border-slate-800 p-5">
+      <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">
+        The 4 Draw-Optimal Matches
+      </h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-slate-500 text-xs border-b border-slate-800">
+              <th class="text-left pb-2">Match</th>
+              <th class="text-left pb-2">Competition</th>
+              <th class="text-center pb-2">Predicted</th>
+              <th class="text-center pb-2">Actual</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-3 text-slate-200">Nigeria vs South Korea</td>
+              <td class="py-3 text-slate-500 text-xs">2010 World Cup</td>
+              <td class="py-3 text-center font-mono text-amber-300">0–0</td>
+              <td class="py-3 text-center">
+                <span class="bg-emerald-900 text-emerald-300 text-xs px-2 py-0.5 rounded">Draw</span>
+              </td>
+            </tr>
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-3 text-slate-200">Sweden vs France</td>
+              <td class="py-3 text-slate-500 text-xs">Euro 2012</td>
+              <td class="py-3 text-center font-mono text-amber-300">0–0</td>
+              <td class="py-3 text-center">
+                <span class="bg-slate-700 text-slate-300 text-xs px-2 py-0.5 rounded">Home win</span>
+              </td>
+            </tr>
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-3 text-slate-200">Italy vs Croatia</td>
+              <td class="py-3 text-slate-500 text-xs">Euro 2012</td>
+              <td class="py-3 text-center font-mono text-amber-300">0–0</td>
+              <td class="py-3 text-center">
+                <span class="bg-emerald-900 text-emerald-300 text-xs px-2 py-0.5 rounded">Draw</span>
+              </td>
+            </tr>
+            <tr class="hover:bg-slate-800 transition-colors">
+              <td class="py-3 text-slate-200">South Africa vs Senegal</td>
+              <td class="py-3 text-slate-500 text-xs">AFCON 2015</td>
+              <td class="py-3 text-center font-mono text-amber-300">0–0</td>
+              <td class="py-3 text-center">
+                <span class="bg-emerald-900 text-emerald-300 text-xs px-2 py-0.5 rounded">Draw</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-slate-500 mt-4">
+        Regime: both teams λ &lt; ~0.95 AND p<sub>draw</sub> &gt; ~0.32. 3 of 4 actual draws — a small sample,
+        but consistent with the model correctly identifying match contexts with elevated draw likelihood.
+      </p>
+    </div>
+  </section>
+
+  <div class="section-rule"></div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       6. THE KNOCKOUT PUZZLE
+  ══════════════════════════════════════════════════════════ -->
+  <section class="max-w-4xl mx-auto px-6 py-12 pb-20">
+    <h2 class="text-2xl font-bold text-white mb-2">The Knockout Calibration Puzzle</h2>
+    <p class="text-slate-400 text-sm mb-8">
+      The model was trained without a stage feature. Systematic miscalibration emerges
+      between group-stage and knockout matches — and the direction of the error is opposite in each.
+    </p>
+
+    <!-- Calibration table -->
+    <div class="bg-slate-900 rounded-xl border border-slate-800 p-5 mb-6">
+      <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Draw-Rate Calibration</h3>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-500 text-xs border-b border-slate-800">
+            <th class="text-left pb-2">Stage</th>
+            <th class="text-right pb-2">Actual draw rate</th>
+            <th class="text-right pb-2">Predicted p<sub>draw</sub></th>
+            <th class="text-right pb-2">Error</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+          <tr>
+            <td class="py-3 text-slate-200">Group stage</td>
+            <td class="py-3 text-right font-mono text-slate-300">24.3%</td>
+            <td class="py-3 text-right font-mono text-slate-300">27.7%</td>
+            <td class="py-3 text-right">
+              <span class="text-rose-400 font-semibold">+3.4pp overpredicts</span>
+            </td>
+          </tr>
+          <tr>
+            <td class="py-3 text-slate-200">Knockout (at 90 min)</td>
+            <td class="py-3 text-right font-mono text-slate-300">32.5%</td>
+            <td class="py-3 text-right font-mono text-slate-300">28.4%</td>
+            <td class="py-3 text-right">
+              <span class="text-emerald-400 font-semibold">−4.1pp underpredicts</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Explanation cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <div class="bg-slate-900 rounded-xl border border-slate-800 p-5">
+        <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Why the Gap?</h3>
+        <p class="text-sm text-slate-300 leading-relaxed">
+          Knockout matches induce tactical caution — the fear of elimination shifts teams toward
+          defensive structures, compressing scoring rates. This effect is not captured by team
+          strength features alone. The model therefore underestimates low-scoring outcomes in
+          knockouts and overestimates them in group stage where teams attack more freely.
+        </p>
+      </div>
+      <div class="bg-slate-900 rounded-xl border border-indigo-900 p-5">
+        <h3 class="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-3">
+          The Extra-Time Deduction
+        </h3>
+        <div class="space-y-3 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-slate-400">WC KO matches going to ET</span>
+            <span class="text-white font-semibold">35.8%</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-slate-400">Avg goals at 90 min (ET matches)</span>
+            <span class="text-white font-semibold">1.83</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-slate-400">Implied λ per team</span>
+            <span class="text-indigo-300 font-semibold">≈ 0.92</span>
+          </div>
+          <div class="w-full h-px bg-slate-800 my-1"></div>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            λ ≈ 0.92 is right at the crossover threshold (0.95). In this regime,
+            draw scorelines — especially 0–0 — become competitive with win scorelines on EV,
+            and the model's underestimated p<sub>draw</sub> makes them undervalued picks.
+          </p>
+          <div class="mt-2 bg-indigo-950 border border-indigo-800 rounded px-3 py-2 text-xs text-indigo-200">
+            Implication: for knockout matches involving two comparable teams, consider checking
+            whether the model's p<sub>draw</sub> is systematically 4pp below the historical base rate.
+            If so, a 0–0 prediction may have higher true EV than the model reports.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer note -->
+    <div class="mt-10 text-xs text-slate-600 border-t border-slate-900 pt-6">
+      All probabilities computed via double-loop Poisson PMF over g<sub>a</sub>, g<sub>b</sub> ∈ [0, 12],
+      renormalised to sum to 1. EV = p<sub>dir</sub> + 2 × p<sub>exact</sub>. Match data: major
+      neutral-venue international fixtures, 2000–2026.
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       JAVASCRIPT
+  ══════════════════════════════════════════════════════════ -->
+  <script>
+    // ── Poisson helpers ──────────────────────────────────────────────────────
+
+    function poissonPMF(k, lambda) {
+      if (lambda <= 0) return k === 0 ? 1 : 0;
+      let logP = -lambda + k * Math.log(lambda);
+      for (let i = 2; i <= k; i++) logP -= Math.log(i);
+      return Math.exp(logP);
+    }
+
+    const MAX_G = 12;
+
+    /** Compute joint match probabilities from Poisson rates. */
+    function matchProbs(la, lb) {
+      let pHome = 0, pDraw = 0, pAway = 0;
+      for (let ga = 0; ga <= MAX_G; ga++) {
+        const pa = poissonPMF(ga, la);
+        for (let gb = 0; gb <= MAX_G; gb++) {
+          const pb = poissonPMF(gb, lb);
+          const joint = pa * pb;
+          if (ga > gb) pHome += joint;
+          else if (ga === gb) pDraw += joint;
+          else pAway += joint;
+        }
+      }
+      // Normalise to account for truncation at MAX_G
+      const total = pHome + pDraw + pAway;
+      return { pHome: pHome / total, pDraw: pDraw / total, pAway: pAway / total };
+    }
+
+    /** Compute EV for all scorelines up to MAX_G and return sorted top-N. */
+    function topScorelinesByEV(la, lb, n = 8) {
+      const { pHome, pDraw, pAway } = matchProbs(la, lb);
+      const results = [];
+
+      for (let ga = 0; ga <= MAX_G; ga++) {
+        const pa = poissonPMF(ga, la);
+        for (let gb = 0; gb <= MAX_G; gb++) {
+          if (ga > 6 && gb > 6) continue; // skip extreme tails
+          const pb = poissonPMF(gb, lb);
+          const pExact = pa * pb;
+          let pDir;
+          if (ga > gb) pDir = pHome;
+          else if (ga === gb) pDir = pDraw;
+          else pDir = pAway;
+          const ev = pDir + 2 * pExact;
+          const type = ga > gb ? 'home' : ga === gb ? 'draw' : 'away';
+          results.push({ label: `${ga}–${gb}`, ev, type });
+        }
+      }
+
+      results.sort((a, b) => b.ev - a.ev);
+      return results.slice(0, n);
+    }
+
+    // ── Color helpers ────────────────────────────────────────────────────────
+
+    const COLOR = {
+      home:  { bar: 'rgba(56, 189, 248, 0.85)',  border: '#38bdf8' },
+      draw:  { bar: 'rgba(251, 191, 36, 0.85)',  border: '#fbbf24' },
+      away:  { bar: 'rgba(251, 113, 133, 0.85)', border: '#fb7185' },
+    };
+
+    // ── Chart.js — EV bar chart ──────────────────────────────────────────────
+
+    const evCtx = document.getElementById('ev-chart').getContext('2d');
+    const evChart = new Chart(evCtx, {
+      type: 'bar',
+      data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderColor: [], borderWidth: 1.5 }] },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 200 },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` EV = ${ctx.raw.toFixed(4)}`
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: '#1e293b' },
+            ticks: { color: '#94a3b8', font: { size: 11 } },
+            title: { display: true, text: 'Expected Value', color: '#64748b', font: { size: 11 } }
+          },
+          y: {
+            grid: { display: false },
+            ticks: { color: '#cbd5e1', font: { family: 'monospace', size: 13 } }
+          }
+        }
+      }
+    });
+
+    function updateEVChart(la, lb) {
+      const top = topScorelinesByEV(la, lb, 8).reverse(); // reverse so best is on top
+      evChart.data.labels = top.map(s => s.label);
+      evChart.data.datasets[0].data = top.map(s => s.ev);
+      evChart.data.datasets[0].backgroundColor = top.map(s => COLOR[s.type].bar);
+      evChart.data.datasets[0].borderColor = top.map(s => COLOR[s.type].border);
+      evChart.update();
+    }
+
+    // ── Chart.js — Boundary line chart ──────────────────────────────────────
+
+    /** Compute minimum p_draw required for draw to be best EV (symmetric case). */
+    function minPDrawRequired(lam) {
+      const { pHome } = matchProbs(lam, lam);
+      // best win scoreline
+      let bestWinP = 0;
+      for (let ga = 0; ga <= MAX_G; ga++) {
+        for (let gb = 0; gb <= MAX_G; gb++) {
+          if (ga === gb) continue;
+          bestWinP = Math.max(bestWinP, poissonPMF(ga, lam) * poissonPMF(gb, lam));
+        }
+      }
+      // best draw scoreline
+      let bestDrawP = 0;
+      for (let g = 0; g <= MAX_G; g++) {
+        bestDrawP = Math.max(bestDrawP, poissonPMF(g, lam) * poissonPMF(g, lam));
+      }
+      // EV(best_win) > EV(best_draw)
+      // pHome + 2*bestWinP  vs  pDraw + 2*bestDrawP
+      // Draw wins when: pDraw + 2*bestDrawP > pHome + 2*bestWinP
+      // i.e. pDraw > pHome + 2*(bestWinP - bestDrawP)
+      // But pHome depends on pDraw via normalisation; for the threshold we solve:
+      // Let r = bestWinP - bestDrawP
+      // threshold_pDraw = 1/3 + (4/3)*r  (derived from the symmetric case where pHome ≈ pAway)
+      const r = bestWinP - bestDrawP;
+      return 1 / 3 + (4 / 3) * r;
+    }
+
+    /** Poisson-implied p_draw for symmetric λ. */
+    function poissonPDraw(lam) {
+      return matchProbs(lam, lam).pDraw;
+    }
+
+    function buildBoundaryChart() {
+      const lambdas = [];
+      const minRequired = [];
+      const actual = [];
+
+      for (let lam = 0.3; lam <= 2.0; lam += 0.05) {
+        lambdas.push(+lam.toFixed(2));
+        minRequired.push(+minPDrawRequired(lam).toFixed(5));
+        actual.push(+poissonPDraw(lam).toFixed(5));
+      }
+
+      const crossoverIdx = lambdas.findIndex(l => l >= 0.95);
+
+      const bCtx = document.getElementById('boundary-chart').getContext('2d');
+
+      // Build fill plugin: shade area where actual > minRequired
+      new Chart(bCtx, {
+        type: 'line',
+        data: {
+          labels: lambdas,
+          datasets: [
+            {
+              label: 'Min p_draw required (boundary)',
+              data: minRequired,
+              borderColor: '#f59e0b',
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: false,
+              tension: 0.3,
+            },
+            {
+              label: 'Poisson-implied p_draw (symmetric)',
+              data: actual,
+              borderColor: '#818cf8',
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: { target: 0, above: 'rgba(34,197,94,0.12)', below: 'transparent' },
+              tension: 0.3,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 20 }
+            },
+            tooltip: {
+              callbacks: {
+                title: ctx => `λ = ${ctx[0].label}`,
+                label: ctx => ` ${ctx.dataset.label.split('(')[0].trim()}: ${(ctx.raw * 100).toFixed(1)}%`
+              }
+            },
+            annotation: {}
+          },
+          scales: {
+            x: {
+              grid: { color: '#1e293b' },
+              ticks: {
+                color: '#94a3b8', font: { size: 10 },
+                callback: (val, idx) => idx % 5 === 0 ? lambdas[idx] : ''
+              },
+              title: { display: true, text: 'λ (symmetric xG rate)', color: '#64748b', font: { size: 11 } }
+            },
+            y: {
+              grid: { color: '#1e293b' },
+              ticks: {
+                color: '#94a3b8', font: { size: 10 },
+                callback: v => (v * 100).toFixed(0) + '%'
+              },
+              title: { display: true, text: 'p_draw', color: '#64748b', font: { size: 11 } }
+            }
+          }
+        },
+        plugins: [{
+          // Draw vertical line at λ = 0.95 and "Draw wins" label
+          id: 'crossoverLine',
+          afterDraw(chart) {
+            const { ctx: c, scales: { x, y } } = chart;
+            const xVal = x.getPixelForValue(crossoverIdx);
+            c.save();
+            c.beginPath();
+            c.moveTo(xVal, y.top);
+            c.lineTo(xVal, y.bottom);
+            c.strokeStyle = 'rgba(134, 239, 172, 0.6)';
+            c.lineWidth = 1.5;
+            c.setLineDash([4, 4]);
+            c.stroke();
+            c.setLineDash([]);
+            c.fillStyle = '#86efac';
+            c.font = '11px sans-serif';
+            c.fillText('λ ≈ 0.95', xVal + 4, y.top + 16);
+            // "Draw wins" label
+            c.fillStyle = 'rgba(34,197,94,0.8)';
+            c.font = 'bold 10px sans-serif';
+            c.fillText('Draw wins ↑', x.getPixelForValue(2), y.getPixelForValue(0.38));
+            c.restore();
+          }
+        }]
+      });
+    }
+
+    // ── Interactive controls ─────────────────────────────────────────────────
+
+    const laSlider = document.getElementById('la-slider');
+    const lbSlider = document.getElementById('lb-slider');
+    const laDisplay = document.getElementById('la-display');
+    const lbDisplay = document.getElementById('lb-display');
+    const pHomeBadge = document.getElementById('p-home-badge');
+    const pDrawBadge = document.getElementById('p-draw-badge');
+    const pAwayBadge = document.getElementById('p-away-badge');
+    const verdictContainer = document.getElementById('verdict-container');
+
+    function updateAll() {
+      const la = parseFloat(laSlider.value);
+      const lb = parseFloat(lbSlider.value);
+
+      laDisplay.textContent = la.toFixed(2);
+      lbDisplay.textContent = lb.toFixed(2);
+
+      const { pHome, pDraw, pAway } = matchProbs(la, lb);
+      pHomeBadge.textContent = `Home win: ${(pHome * 100).toFixed(1)}%`;
+      pDrawBadge.textContent = `Draw: ${(pDraw * 100).toFixed(1)}%`;
+      pAwayBadge.textContent = `Away win: ${(pAway * 100).toFixed(1)}%`;
+
+      // Determine if any draw scoreline is best EV
+      const top = topScorelinesByEV(la, lb, 1);
+      const drawIsTop = top[0]?.type === 'draw';
+
+      verdictContainer.innerHTML = '';
+      const div = document.createElement('div');
+      div.className = 'fade-in inline-flex items-center gap-3 px-4 py-3 rounded-xl border text-sm font-semibold';
+
+      if (drawIsTop) {
+        div.classList.add('bg-amber-900', 'border-amber-600', 'text-amber-200');
+        div.innerHTML =
+          `<span class="text-lg">&#9670;</span>` +
+          `Draw IS the best EV bet — best scoreline: ` +
+          `<span class="font-mono text-amber-100">${top[0].label}</span>` +
+          `<span class="font-normal text-amber-400 ml-1">(EV = ${top[0].ev.toFixed(4)})</span>`;
+      } else {
+        const bestDraw = topScorelinesByEV(la, lb, 20).find(s => s.type === 'draw');
+        div.classList.add('bg-slate-800', 'border-slate-600', 'text-slate-300');
+        div.innerHTML =
+          `<span class="text-lg text-slate-500">&#9671;</span>` +
+          `Draw is <span class="text-rose-400">NOT</span> the best EV bet — best: ` +
+          `<span class="font-mono text-sky-300">${top[0].label}</span>` +
+          `<span class="font-normal text-slate-500 ml-1">(EV = ${top[0].ev.toFixed(4)})</span>`;
+        if (bestDraw) {
+          div.innerHTML += `&nbsp; · &nbsp; best draw: <span class="font-mono text-amber-500">${bestDraw.label}</span>` +
+            `<span class="font-normal text-slate-600 ml-1">(EV = ${bestDraw.ev.toFixed(4)})</span>`;
+        }
+      }
+
+      verdictContainer.appendChild(div);
+      updateEVChart(la, lb);
+    }
+
+    laSlider.addEventListener('input', updateAll);
+    lbSlider.addEventListener('input', updateAll);
+
+    // ── Initialise ───────────────────────────────────────────────────────────
+    updateAll();
+    buildBoundaryChart();
+  </script>
+</body>
+</html>

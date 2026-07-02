@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Should You Predict a Draw?</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 6px;
+      border-radius: 3px;
+      background: #334155;
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #6366f1;
+      cursor: pointer;
+      border: 2px solid #818cf8;
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #6366f1;
+      cursor: pointer;
+      border: 2px solid #818cf8;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeIn 0.2s ease; }
+  </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+
+  <div class="max-w-3xl mx-auto px-6 pt-14 pb-20">
+
+    <!-- Header -->
+    <h1 class="text-3xl sm:text-4xl font-bold text-white leading-tight mb-3">
+      Should You Predict a Draw?
+    </h1>
+    <p class="text-slate-400 text-base max-w-2xl leading-relaxed mb-2">
+      Set how many goals you expect each team to score. The tool ranks every
+      possible scoreline by the average points it would earn you, and tells
+      you whether predicting a draw is ever the smartest pick.
+    </p>
+    <p class="text-slate-600 text-xs mb-10">
+      Scoring: 3 pts for exact scoreline · 1 pt for correct result (win/draw/loss) · 0 pts otherwise.
+    </p>
+
+    <!-- ── Sliders ── -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-8">
+
+      <div class="bg-slate-900 rounded-2xl border border-slate-800 p-6">
+        <div class="flex justify-between items-end mb-4">
+          <div>
+            <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Home team</div>
+            <div class="text-sm text-slate-300">Expected goals</div>
+          </div>
+          <span id="la-display" class="text-3xl font-black text-indigo-400 tabular-nums">1.40</span>
+        </div>
+        <input id="la-slider" type="range" min="0.3" max="3.0" step="0.05" value="1.4" class="w-full" />
+        <div class="flex justify-between text-xs text-slate-700 mt-2">
+          <span>0.3 — very defensive</span>
+          <span>3.0 — very attacking</span>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 rounded-2xl border border-slate-800 p-6">
+        <div class="flex justify-between items-end mb-4">
+          <div>
+            <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Away team</div>
+            <div class="text-sm text-slate-300">Expected goals</div>
+          </div>
+          <span id="lb-display" class="text-3xl font-black text-indigo-400 tabular-nums">1.10</span>
+        </div>
+        <input id="lb-slider" type="range" min="0.3" max="3.0" step="0.05" value="1.1" class="w-full" />
+        <div class="flex justify-between text-xs text-slate-700 mt-2">
+          <span>0.3 — very defensive</span>
+          <span>3.0 — very attacking</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Match probabilities ── -->
+    <div class="flex flex-wrap gap-3 mb-5 items-center">
+      <span class="text-xs text-slate-600 mr-1">Implied match probabilities:</span>
+      <span id="p-home-badge"
+            class="bg-sky-900/60 border border-sky-800 text-sky-300 text-sm font-semibold px-3 py-1 rounded-full">
+        Home win: —
+      </span>
+      <span id="p-draw-badge"
+            class="bg-amber-900/60 border border-amber-800 text-amber-300 text-sm font-semibold px-3 py-1 rounded-full">
+        Draw: —
+      </span>
+      <span id="p-away-badge"
+            class="bg-rose-900/60 border border-rose-800 text-rose-300 text-sm font-semibold px-3 py-1 rounded-full">
+        Away win: —
+      </span>
+    </div>
+
+    <!-- ── Verdict ── -->
+    <div id="verdict-container" class="mb-8"></div>
+
+    <!-- ── Chart ── -->
+    <div class="bg-slate-900 rounded-2xl border border-slate-800 p-5">
+      <div class="mb-4">
+        <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
+          <h2 id="chart-title" class="text-sm font-semibold text-slate-300 uppercase tracking-wider">
+            Top 8 scorelines by expected points
+          </h2>
+          <div class="flex rounded-lg overflow-hidden border border-slate-700 text-xs font-semibold">
+            <button id="sort-ev" onclick="setSortMode('ev')"
+                    class="px-3 py-1.5 bg-indigo-700 text-white transition-colors">
+              Expected points
+            </button>
+            <button id="sort-prob" onclick="setSortMode('prob')"
+                    class="px-3 py-1.5 bg-slate-800 text-slate-400 hover:bg-slate-700 transition-colors">
+              Probability
+            </button>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-500">
+          <span class="font-semibold text-slate-400">Result type:</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-sm bg-sky-400/80"></span>Home win</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400/80"></span>Draw</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-sm bg-rose-400/80"></span>Away win</span>
+          <span class="ml-2 pl-2 border-l border-slate-700 font-semibold text-slate-400">Bar style:</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-7 h-2.5 rounded-sm bg-sky-400/85"></span>Expected points <span class="text-slate-600">(bottom axis)</span></span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-7 h-2.5 rounded-sm bg-sky-400/25 border border-sky-400/50"></span>Chance of exact score <span class="text-slate-600">(top axis, %)</span></span>
+        </div>
+      </div>
+      <div style="height: 380px; position: relative;">
+        <canvas id="ev-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- ── Why draws are usually worse ── -->
+    <div id="explanation-panel" class="mt-6 bg-slate-900 rounded-2xl border border-slate-800 p-5 text-sm text-slate-400 leading-relaxed hidden">
+    </div>
+
+    <!-- ── Footnote ── -->
+    <p class="mt-10 text-xs text-slate-700 leading-relaxed border-t border-slate-900 pt-6">
+      <strong class="text-slate-600">How the numbers are calculated:</strong>
+      Goal counts are modelled as independent Poisson distributions — the standard
+      assumption in football analytics. Given the two expected-goal numbers you set,
+      the tool computes the probability of every scoreline up to 12–12, then weights
+      each one by the points it would earn (3 if exact, 1 if the right result, 0 otherwise)
+      to get the average points ("expected points") per prediction.
+    </p>
+
+  </div>
+
+  <script>
+    // ── Poisson PMF ──────────────────────────────────────────────────────────
+    function poissonPMF(k, lambda) {
+      if (lambda <= 0) return k === 0 ? 1 : 0;
+      let logP = -lambda + k * Math.log(lambda);
+      for (let i = 2; i <= k; i++) logP -= Math.log(i);
+      return Math.exp(logP);
+    }
+
+    const MAX_G = 12;
+
+    function matchProbs(la, lb) {
+      let pHome = 0, pDraw = 0, pAway = 0;
+      for (let ga = 0; ga <= MAX_G; ga++) {
+        const pa = poissonPMF(ga, la);
+        for (let gb = 0; gb <= MAX_G; gb++) {
+          const joint = pa * poissonPMF(gb, lb);
+          if (ga > gb) pHome += joint;
+          else if (ga === gb) pDraw += joint;
+          else pAway += joint;
+        }
+      }
+      const total = pHome + pDraw + pAway;
+      return { pHome: pHome / total, pDraw: pDraw / total, pAway: pAway / total };
+    }
+
+    // Expected points = P(correct direction) + 2 × P(exact scoreline)
+    // = 1 pt base if direction right, plus 2 extra pts if also exact
+    function topScorelinesByEV(la, lb, n = 8) {
+      const { pHome, pDraw, pAway } = matchProbs(la, lb);
+      const results = [];
+      for (let ga = 0; ga <= MAX_G; ga++) {
+        const pa = poissonPMF(ga, la);
+        for (let gb = 0; gb <= MAX_G; gb++) {
+          if (ga > 6 && gb > 6) continue;
+          const pExact = pa * poissonPMF(gb, lb);
+          const pDir = ga > gb ? pHome : ga === gb ? pDraw : pAway;
+          const ev = pDir + 2 * pExact;
+          const type = ga > gb ? 'home' : ga === gb ? 'draw' : 'away';
+          results.push({ label: `${ga}–${gb}`, ev, pExact, type });
+        }
+      }
+      results.sort((a, b) => b.ev - a.ev);
+      return results.slice(0, n);
+    }
+
+    // ── Colors ───────────────────────────────────────────────────────────────
+    const COLOR = {
+      home: { bar: 'rgba(56, 189, 248, 0.85)',  border: '#38bdf8', prob: 'rgba(56, 189, 248, 0.25)',  probBorder: 'rgba(56, 189, 248, 0.5)' },
+      draw: { bar: 'rgba(251, 191, 36, 0.85)',  border: '#fbbf24', prob: 'rgba(251, 191, 36, 0.25)',  probBorder: 'rgba(251, 191, 36, 0.5)' },
+      away: { bar: 'rgba(251, 113, 133, 0.85)', border: '#fb7185', prob: 'rgba(251, 113, 133, 0.25)', probBorder: 'rgba(251, 113, 133, 0.5)' },
+    };
+
+    // ── Chart ────────────────────────────────────────────────────────────────
+    const evCtx = document.getElementById('ev-chart').getContext('2d');
+    const evChart = new Chart(evCtx, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'Expected points',
+            data: [],
+            backgroundColor: [],
+            borderColor: [],
+            borderWidth: 1.5,
+            xAxisID: 'xEV',
+          },
+          {
+            label: 'Chance this exact score occurs',
+            data: [],
+            backgroundColor: [],
+            borderColor: [],
+            borderWidth: 1,
+            xAxisID: 'xProb',
+          }
+        ]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 180 },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ctx.datasetIndex === 0
+                ? ` ${ctx.raw.toFixed(3)} expected points`
+                : ` ${(ctx.raw * 100).toFixed(1)}% chance of this exact score`
+            }
+          }
+        },
+        scales: {
+          xEV: {
+            position: 'bottom',
+            grid: { color: '#1e293b' },
+            ticks: { color: '#94a3b8', font: { size: 11 } },
+            title: { display: true, text: 'Expected points (solid bars)', color: '#64748b', font: { size: 11 } }
+          },
+          xProb: {
+            position: 'top',
+            grid: { display: false },
+            ticks: { color: '#64748b', font: { size: 10 }, callback: v => (v * 100).toFixed(0) + '%' },
+            title: { display: true, text: 'Chance of exact score (faint bars)', color: '#475569', font: { size: 10 } }
+          },
+          y: {
+            grid: { display: false },
+            ticks: { color: '#cbd5e1', font: { family: 'monospace', size: 13 } }
+          }
+        }
+      }
+    });
+
+    let sortMode = 'ev';
+
+    function setSortMode(mode) {
+      sortMode = mode;
+      document.getElementById('sort-ev').className =
+        'px-3 py-1.5 transition-colors ' +
+        (mode === 'ev' ? 'bg-indigo-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700');
+      document.getElementById('sort-prob').className =
+        'px-3 py-1.5 transition-colors ' +
+        (mode === 'prob' ? 'bg-indigo-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700');
+      document.getElementById('chart-title').textContent =
+        mode === 'ev' ? 'Top 8 scorelines by expected points' : 'Top 8 scorelines by probability';
+      const la = parseFloat(document.getElementById('la-slider').value);
+      const lb = parseFloat(document.getElementById('lb-slider').value);
+      updateChart(la, lb);
+    }
+
+    function updateChart(la, lb) {
+      // Fetch a wide pool so switching to prob sort doesn't miss high-prob scorelines
+      const pool = topScorelinesByEV(la, lb, 30);
+      if (sortMode === 'prob') {
+        pool.sort((a, b) => b.pExact - a.pExact);
+      }
+      const top = pool.slice(0, 8).reverse();
+      evChart.data.labels = top.map(s => s.label);
+      evChart.data.datasets[0].data = top.map(s => s.ev);
+      evChart.data.datasets[0].backgroundColor = top.map(s => COLOR[s.type].bar);
+      evChart.data.datasets[0].borderColor = top.map(s => COLOR[s.type].border);
+      evChart.data.datasets[1].data = top.map(s => s.pExact);
+      evChart.data.datasets[1].backgroundColor = top.map(s => COLOR[s.type].prob);
+      evChart.data.datasets[1].borderColor = top.map(s => COLOR[s.type].probBorder);
+      evChart.update();
+    }
+
+    // ── Controls ─────────────────────────────────────────────────────────────
+    const laSlider = document.getElementById('la-slider');
+    const lbSlider = document.getElementById('lb-slider');
+    const laDisplay = document.getElementById('la-display');
+    const lbDisplay = document.getElementById('lb-display');
+    const pHomeBadge = document.getElementById('p-home-badge');
+    const pDrawBadge = document.getElementById('p-draw-badge');
+    const pAwayBadge = document.getElementById('p-away-badge');
+    const verdictContainer = document.getElementById('verdict-container');
+    const explanationPanel = document.getElementById('explanation-panel');
+
+    function updateAll() {
+      const la = parseFloat(laSlider.value);
+      const lb = parseFloat(lbSlider.value);
+
+      laDisplay.textContent = la.toFixed(2);
+      lbDisplay.textContent = lb.toFixed(2);
+
+      const { pHome, pDraw, pAway } = matchProbs(la, lb);
+      pHomeBadge.textContent = `Home win: ${(pHome * 100).toFixed(1)}%`;
+      pDrawBadge.textContent = `Draw: ${(pDraw * 100).toFixed(1)}%`;
+      pAwayBadge.textContent = `Away win: ${(pAway * 100).toFixed(1)}%`;
+
+      const top1 = topScorelinesByEV(la, lb, 1);
+      const drawIsTop = top1[0]?.type === 'draw';
+
+      // Build verdict
+      verdictContainer.innerHTML = '';
+      const div = document.createElement('div');
+      div.className = 'fade-in flex items-start gap-3 px-5 py-4 rounded-2xl border text-sm font-semibold';
+
+      if (drawIsTop) {
+        div.classList.add('bg-amber-900/40', 'border-amber-600', 'text-amber-200');
+        div.innerHTML =
+          `<span class="text-xl mt-0.5">&#9670;</span>` +
+          `<div>` +
+          `<div>Draw <span class="text-amber-100">IS</span> the best prediction here</div>` +
+          `<div class="font-normal text-amber-400 text-xs mt-1">Best pick: <span class="font-mono font-bold">${top1[0].label}</span> · ${top1[0].ev.toFixed(3)} expected points</div>` +
+          `</div>`;
+      } else {
+        const bestDraw = topScorelinesByEV(la, lb, 20).find(s => s.type === 'draw');
+        div.classList.add('bg-slate-800/80', 'border-slate-700', 'text-slate-300');
+        const bestTypeLabel = top1[0].type === 'home' ? 'home win' : 'away win';
+        div.innerHTML =
+          `<span class="text-xl mt-0.5 text-slate-500">&#9671;</span>` +
+          `<div>` +
+          `<div>Draw is <span class="text-rose-400">not</span> the best prediction — a ${bestTypeLabel} scores more points on average</div>` +
+          `<div class="font-normal text-slate-400 text-xs mt-1">` +
+          `Best pick: <span class="font-mono font-bold text-sky-300">${top1[0].label}</span> · ${top1[0].ev.toFixed(3)} expected points` +
+          (bestDraw
+            ? ` &nbsp;·&nbsp; best draw: <span class="font-mono text-amber-500">${bestDraw.label}</span> · ${bestDraw.ev.toFixed(3)} pts`
+            : '') +
+          `</div>` +
+          `</div>`;
+      }
+
+      verdictContainer.appendChild(div);
+
+      // Explanation panel
+      if (!drawIsTop) {
+        explanationPanel.classList.remove('hidden');
+        explanationPanel.innerHTML =
+          `<strong class="text-slate-300">Why a draw prediction falls short here:</strong><br/>` +
+          `Even if both teams are equally likely to score, a draw result only happens about ` +
+          `<strong class="text-slate-300">${(pDraw * 100).toFixed(0)}%</strong> of the time, ` +
+          `while a home win happens <strong class="text-slate-300">${(pHome * 100).toFixed(0)}%</strong> of the time. ` +
+          `Since you earn 1 point just for predicting the right outcome, picking the more likely ` +
+          `result (home win) gives you a higher floor — and that gap is hard for any draw prediction to overcome.` +
+          `<br/><br/>` +
+          `Draw predictions become competitive only when both teams are expected to score <strong class="text-slate-300">fewer than ~1 goal each</strong>, ` +
+          `which makes 0–0 the single most likely individual scoreline.`;
+      } else {
+        explanationPanel.classList.add('hidden');
+      }
+
+      updateChart(la, lb);
+    }
+
+    laSlider.addEventListener('input', updateAll);
+    lbSlider.addEventListener('input', updateAll);
+    updateAll();
+  </script>
+</body>
+</html>
