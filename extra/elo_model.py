@@ -24,10 +24,56 @@ ELO_SNAPSHOT = "2026-05-27"
 DEFAULT_THRESHOLD = 250
 
 
+def _apply_live_updates(ratings: dict[str, float]) -> None:
+    """Update ratings in-place for every completed match after ELO_SNAPSHOT."""
+    from wc2026.data.elo import HOME_ADVANTAGE, _goal_diff_multiplier, k_value
+
+    results_path = DATA_DIR / "results.csv"
+    if not results_path.exists():
+        return
+    df = pd.read_csv(results_path, parse_dates=["date"])
+    df = df[
+        (df["date"].dt.date > pd.Timestamp(ELO_SNAPSHOT).date())
+        & df["home_score"].notna()
+        & df["away_score"].notna()
+    ].sort_values("date")
+
+    fallback = float(pd.Series(list(ratings.values())).median())
+
+    def _resolve(name: str) -> str:
+        if name in ratings:
+            return name
+        lower = name.lower()
+        exact = [t for t in ratings if t.lower() == lower]
+        if exact:
+            return exact[0]
+        close = [t for t in ratings if lower in t.lower() or t.lower() in lower]
+        return close[0] if close else name
+
+    for _, row in df.iterrows():
+        home = _resolve(str(row["home_team"]))
+        away = _resolve(str(row["away_team"]))
+        gh, ga = int(row["home_score"]), int(row["away_score"])
+        neutral = bool(row["neutral"])
+        tournament = str(row.get("tournament", ""))
+
+        rh = ratings.get(home, fallback)
+        ra = ratings.get(away, fallback)
+        home_adv = 0.0 if neutral else HOME_ADVANTAGE
+        dr = (rh + home_adv) - ra
+        we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
+        w_h = 1.0 if gh > ga else (0.5 if gh == ga else 0.0)
+        delta = k_value(tournament) * _goal_diff_multiplier(gh - ga) * (w_h - we_h)
+        ratings[home] = rh + delta
+        ratings[away] = ra - delta
+
+
 def load_ratings() -> dict[str, float]:
     df = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv")
     snap = df[df["snapshot_date"] == ELO_SNAPSHOT]
-    return dict(zip(snap["country"], snap["rating"]))
+    ratings = dict(zip(snap["country"], snap["rating"]))
+    _apply_live_updates(ratings)
+    return ratings
 
 
 def resolve(name: str, ratings: dict[str, float]) -> str:

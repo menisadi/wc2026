@@ -18,6 +18,9 @@ import pandas as pd
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
 
+# Pre-tournament ELO snapshot (WC 2026 group stage started 2026-06-11)
+ELO_SNAPSHOT = "2026-05-27"
+
 SCHEDULE_NORM: dict[str, str] = {
     "Bosnia-Herzegovina": "Bosnia and Herzegovina",
     "Congo DR": "DR Congo",
@@ -35,13 +38,60 @@ ELO_SCALE = 600.0  # higher = flatter; at diff=600 xG ratio is e≈2.7×
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 
+def _apply_live_updates(ratings: dict[str, float]) -> None:
+    """Update ratings in-place for every completed match after ELO_SNAPSHOT."""
+    from wc2026.data.elo import HOME_ADVANTAGE, _goal_diff_multiplier, k_value
+
+    results_path = DATA_DIR / "results.csv"
+    if not results_path.exists():
+        return
+    df = pd.read_csv(results_path, parse_dates=["date"])
+    df = df[
+        (df["date"].dt.date > pd.Timestamp(ELO_SNAPSHOT).date())
+        & df["home_score"].notna()
+        & df["away_score"].notna()
+    ].sort_values("date")
+
+    fallback = float(pd.Series(list(ratings.values())).median())
+
+    def _resolve(name: str) -> str:
+        if name in ratings:
+            return name
+        lower = name.lower()
+        exact = [t for t in ratings if t.lower() == lower]
+        if exact:
+            return exact[0]
+        close = [t for t in ratings if lower in t.lower() or t.lower() in lower]
+        return close[0] if close else name
+
+    for _, row in df.iterrows():
+        home = _resolve(str(row["home_team"]))
+        away = _resolve(str(row["away_team"]))
+        gh, ga = int(row["home_score"]), int(row["away_score"])
+        neutral = bool(row["neutral"])
+        tournament = str(row.get("tournament", ""))
+
+        rh = ratings.get(home, fallback)
+        ra = ratings.get(away, fallback)
+        home_adv = 0.0 if neutral else HOME_ADVANTAGE
+        dr = (rh + home_adv) - ra
+        we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
+        w_h = 1.0 if gh > ga else (0.5 if gh == ga else 0.0)
+        delta = k_value(tournament) * _goal_diff_multiplier(gh - ga) * (w_h - we_h)
+        ratings[home] = rh + delta
+        ratings[away] = ra - delta
+
+
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     schedule = pd.read_csv(DATA_DIR / "schedule_2026.csv", parse_dates=["Date"])
     for col in ("home_team", "away_team"):
         schedule[col] = schedule[col].map(lambda t: SCHEDULE_NORM.get(str(t), str(t)))
 
-    elo = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv")
-    elo = elo[elo["snapshot_date"] == elo["snapshot_date"].max()].set_index("country")
+    elo_raw = pd.read_csv(DATA_DIR / "elo_ratings_wc2026.csv")
+    snap = elo_raw[elo_raw["snapshot_date"] == ELO_SNAPSHOT]
+    ratings = dict(zip(snap["country"], snap["rating"]))
+    _apply_live_updates(ratings)
+    elo = pd.DataFrame({"rating": ratings})
 
     return schedule, elo
 
