@@ -95,6 +95,39 @@ def load_ratings(live: bool) -> dict[str, float]:
     return ratings
 
 
+def load_actual_results(ratings: dict[str, float]) -> dict[tuple[str, str], tuple[int, int]]:
+    """Return played WC 2026 matches keyed by resolved team names."""
+    results_path = DATA_DIR / "results.csv"
+    if not results_path.exists():
+        return {}
+    df = pd.read_csv(results_path, parse_dates=["date"])
+    df = df[
+        (df["tournament"] == "FIFA World Cup")
+        & (df["date"].dt.year == 2026)
+        & df["home_score"].notna()
+        & df["away_score"].notna()
+    ]
+    actual: dict[tuple[str, str], tuple[int, int]] = {}
+    for _, row in df.iterrows():
+        h = _resolve(str(row["home_team"]), ratings)
+        a = _resolve(str(row["away_team"]), ratings)
+        actual[(h, a)] = (int(row["home_score"]), int(row["away_score"]))
+    return actual
+
+
+def load_knockout_pairs(ratings: dict[str, float]) -> list[tuple[str, str]] | None:
+    """Return R32 pairs in official bracket tree order, or None if unavailable."""
+    path = DATA_DIR.parent / "knockout_bracket.csv"
+    if not path.exists():
+        return None
+    df = pd.read_csv(path, comment="#")
+    pairs = [
+        (_resolve(str(row["home"]), ratings), _resolve(str(row["away"]), ratings))
+        for _, row in df.iterrows()
+    ]
+    return pairs or None
+
+
 # ── Prediction ────────────────────────────────────────────────────────────────
 
 
@@ -163,22 +196,32 @@ def load_groups() -> dict[str, list[str]]:
 
 
 def sim_group(
-    teams: list[str], ratings: dict[str, float]
+    teams: list[str],
+    ratings: dict[str, float],
+    actual: dict[tuple[str, str], tuple[int, int]],
 ) -> list[Standing]:
     recs = {t: Standing(t) for t in teams}
     for i, a in enumerate(teams):
         for b in teams[i + 1 :]:
             a_key = _resolve(a, ratings)
             b_key = _resolve(b, ratings)
-            ga, gb = predict(a_key, b_key, ratings)
+            if (a_key, b_key) in actual:
+                ga, gb = actual[(a_key, b_key)]
+            elif (b_key, a_key) in actual:
+                gb, ga = actual[(b_key, a_key)]
+            else:
+                ga, gb = predict(a_key, b_key, ratings)
             recs[a].gf += ga
             recs[a].gd += ga - gb
             recs[b].gf += gb
             recs[b].gd += gb - ga
             if ga > gb:
                 recs[a].pts += 3
-            else:
+            elif gb > ga:
                 recs[b].pts += 3
+            else:
+                recs[a].pts += 1
+                recs[b].pts += 1
     return sorted(recs.values(), key=Standing.key, reverse=True)
 
 
@@ -196,10 +239,21 @@ def build_bracket(standings: dict[str, list[Standing]]) -> list[tuple[str, str]]
     return pairs
 
 
-def advance(pairs: list[tuple[str, str]], ratings: dict[str, float]) -> list[str]:
+def advance(
+    pairs: list[tuple[str, str]],
+    ratings: dict[str, float],
+    actual: dict[tuple[str, str], tuple[int, int]],
+) -> list[str]:
     winners = []
     for home, away in pairs:
-        gh, ga = predict(_resolve(home, ratings), _resolve(away, ratings), ratings)
+        h_key = _resolve(home, ratings)
+        a_key = _resolve(away, ratings)
+        if (h_key, a_key) in actual:
+            gh, ga = actual[(h_key, a_key)]
+        elif (a_key, h_key) in actual:
+            ga, gh = actual[(a_key, h_key)]
+        else:
+            gh, ga = predict(h_key, a_key, ratings)
         winners.append(home if gh > ga else away)
     return winners
 
@@ -216,23 +270,35 @@ def main() -> None:
         action="store_true",
         help=f"Use the pre-tournament ELO snapshot ({ELO_SNAPSHOT}) instead of live ratings",
     )
+    parser.add_argument(
+        "--ignore-actual",
+        action="store_true",
+        help="Ignore real match results; simulate the entire tournament from scratch with ELO",
+    )
     args = parser.parse_args()
 
     live = not args.fixed
     ratings = load_ratings(live)
     groups = load_groups()
 
+    if args.ignore_actual:
+        actual: dict[tuple[str, str], tuple[int, int]] = {}
+        knockout_pairs = None
+    else:
+        actual = load_actual_results(ratings)
+        knockout_pairs = load_knockout_pairs(ratings)
+
     standings: dict[str, list[Standing]] = {
-        label: sim_group(teams, ratings) for label, teams in sorted(groups.items())
+        label: sim_group(teams, ratings, actual) for label, teams in sorted(groups.items())
     }
 
-    r32_pairs   = build_bracket(standings)
+    r32_pairs   = knockout_pairs or build_bracket(standings)
     r32_teams   = {t for pair in r32_pairs for t in pair}
-    r32_winners = advance(r32_pairs, ratings)
-    r16_winners = advance(list(zip(r32_winners[::2], r32_winners[1::2])), ratings)
-    qf_winners  = advance(list(zip(r16_winners[::2], r16_winners[1::2])), ratings)
-    sf_winners  = advance(list(zip(qf_winners[::2],  qf_winners[1::2])),  ratings)
-    champion    = advance([(sf_winners[0], sf_winners[1])], ratings)[0]
+    r32_winners = advance(r32_pairs, ratings, actual)
+    r16_winners = advance(list(zip(r32_winners[::2], r32_winners[1::2])), ratings, actual)
+    qf_winners  = advance(list(zip(r16_winners[::2], r16_winners[1::2])), ratings, actual)
+    sf_winners  = advance(list(zip(qf_winners[::2],  qf_winners[1::2])),  ratings, actual)
+    champion    = advance([(sf_winners[0], sf_winners[1])], ratings, actual)[0]
 
     all_group_teams = {t.team for s in standings.values() for t in s}
     exit_round: dict[str, str] = {}
@@ -248,7 +314,8 @@ def main() -> None:
     all_teams = sorted(exit_round.items(), key=lambda x: round_order.get(x[1], 9))
 
     mode = "live ELO" if live else f"fixed ELO ({ELO_SNAPSHOT})"
-    print(f"\nDouble-threshold bracket  [{mode}]\n")
+    actual_mode = "simulated" if args.ignore_actual else "actual results"
+    print(f"\nDouble-threshold bracket  [{mode}, {actual_mode}]\n")
     for team, reached in all_teams:
         print(f"  {team:<28} {reached}")
 
