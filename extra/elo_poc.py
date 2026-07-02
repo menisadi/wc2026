@@ -96,6 +96,39 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     return schedule, elo
 
 
+def load_actual_results(model: EloModel) -> dict[tuple[str, str], tuple[int, int]]:
+    """Return played WC 2026 matches keyed by resolved team names."""
+    results_path = DATA_DIR / "results.csv"
+    if not results_path.exists():
+        return {}
+    df = pd.read_csv(results_path, parse_dates=["date"])
+    df = df[
+        (df["tournament"] == "FIFA World Cup")
+        & (df["date"].dt.year == 2026)
+        & df["home_score"].notna()
+        & df["away_score"].notna()
+    ]
+    actual: dict[tuple[str, str], tuple[int, int]] = {}
+    for _, row in df.iterrows():
+        h = model._resolve(str(row["home_team"]))
+        a = model._resolve(str(row["away_team"]))
+        actual[(h, a)] = (int(row["home_score"]), int(row["away_score"]))
+    return actual
+
+
+def load_knockout_pairs(model: EloModel) -> list[tuple[str, str]] | None:
+    """Return R32 pairs in official bracket tree order, or None if unavailable."""
+    path = DATA_DIR.parent / "knockout_bracket.csv"
+    if not path.exists():
+        return None
+    df = pd.read_csv(path, comment="#")
+    pairs = [
+        (model._resolve(str(row["home"])), model._resolve(str(row["away"])))
+        for _, row in df.iterrows()
+    ]
+    return pairs or None
+
+
 def extract_groups(schedule: pd.DataFrame) -> dict[str, list[str]]:
     adj: dict[str, set[str]] = defaultdict(set)
     for _, row in schedule[schedule["Round"] == "Group stage"].iterrows():
@@ -121,6 +154,16 @@ class EloModel:
     def __init__(self, elo: pd.DataFrame) -> None:
         self._ratings: pd.Series = elo["rating"]
         self._fallback = float(self._ratings.median())
+
+    def _resolve(self, name: str) -> str:
+        if name in self._ratings.index:
+            return name
+        lower = name.lower()
+        exact = [t for t in self._ratings.index if t.lower() == lower]
+        if exact:
+            return exact[0]
+        close = [t for t in self._ratings.index if lower in t.lower() or t.lower() in lower]
+        return close[0] if close else name
 
     def _rating(self, team: str) -> float:
         return float(self._ratings[team]) if team in self._ratings.index else self._fallback
@@ -155,11 +198,23 @@ class Standing:
         return (self.pts, self.gd, self.gf)
 
 
-def sim_group(teams: list[str], model: EloModel, rng: np.random.Generator) -> list[Standing]:
+def sim_group(
+    teams: list[str],
+    model: EloModel,
+    rng: np.random.Generator,
+    actual: dict[tuple[str, str], tuple[int, int]],
+) -> list[Standing]:
     recs = {t: Standing(t) for t in teams}
     for i, a in enumerate(teams):
         for b in teams[i + 1 :]:
-            ga, gb = model.play(a, b, rng)
+            a_key = model._resolve(a)
+            b_key = model._resolve(b)
+            if (a_key, b_key) in actual:
+                ga, gb = actual[(a_key, b_key)]
+            elif (b_key, a_key) in actual:
+                gb, ga = actual[(b_key, a_key)]
+            else:
+                ga, gb = model.play(a, b, rng)
             recs[a].gf += ga
             recs[a].gd += ga - gb
             recs[b].gf += gb
@@ -188,20 +243,46 @@ def build_bracket(standings: dict[str, list[Standing]]) -> list[tuple[str, str]]
     return pairs
 
 
-def sim_knockout_round(teams: list[str], model: EloModel, rng: np.random.Generator) -> list[str]:
-    return [model.knockout(teams[i], teams[i + 1], rng) for i in range(0, len(teams), 2)]
+def sim_knockout_round(
+    teams: list[str],
+    model: EloModel,
+    rng: np.random.Generator,
+    actual: dict[tuple[str, str], tuple[int, int]],
+) -> list[str]:
+    winners = []
+    for i in range(0, len(teams), 2):
+        home, away = teams[i], teams[i + 1]
+        h_key = model._resolve(home)
+        a_key = model._resolve(away)
+        if (h_key, a_key) in actual:
+            gh, ga = actual[(h_key, a_key)]
+            winners.append(home if gh > ga else away)
+        elif (a_key, h_key) in actual:
+            ga, gh = actual[(a_key, h_key)]
+            winners.append(home if gh > ga else away)
+        else:
+            winners.append(model.knockout(home, away, rng))
+    return winners
 
 
-def sim_tournament(groups: dict[str, list[str]], model: EloModel, rng: np.random.Generator) -> str:
-    standings = {g: sim_group(teams, model, rng) for g, teams in groups.items()}
-    r32_pairs = build_bracket(standings)
-    r32_teams = [t for pair in r32_pairs for t in pair]
+def sim_tournament(
+    groups: dict[str, list[str]],
+    model: EloModel,
+    rng: np.random.Generator,
+    actual: dict[tuple[str, str], tuple[int, int]],
+    knockout_pairs: list[tuple[str, str]] | None,
+) -> str:
+    standings = {g: sim_group(teams, model, rng, actual) for g, teams in groups.items()}
+    if knockout_pairs is not None:
+        r32_teams = [t for pair in knockout_pairs for t in pair]
+    else:
+        r32_teams = [t for pair in build_bracket(standings) for t in pair]
 
-    r16 = sim_knockout_round(r32_teams, model, rng)
-    qf = sim_knockout_round(r16, model, rng)
-    sf = sim_knockout_round(qf, model, rng)
-    f = sim_knockout_round(sf, model, rng)
-    return sim_knockout_round(f, model, rng)[0]
+    r16 = sim_knockout_round(r32_teams, model, rng, actual)
+    qf = sim_knockout_round(r16, model, rng, actual)
+    sf = sim_knockout_round(qf, model, rng, actual)
+    f = sim_knockout_round(sf, model, rng, actual)
+    return sim_knockout_round(f, model, rng, actual)[0]
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -213,6 +294,11 @@ def main() -> None:
     _ = parser.add_argument("--top", type=int, default=10)
     _ = parser.add_argument("--csv", action="store_true")
     _ = parser.add_argument("--quiet", action="store_true")
+    _ = parser.add_argument(
+        "--ignore-actual",
+        action="store_true",
+        help="Ignore real match results; simulate the entire tournament from scratch with ELO",
+    )
     args = parser.parse_args()
 
     if not args.quiet:
@@ -222,10 +308,19 @@ def main() -> None:
 
     model = EloModel(elo)
 
+    if args.ignore_actual:
+        actual: dict[tuple[str, str], tuple[int, int]] = {}
+        knockout_pairs = None
+    else:
+        actual = load_actual_results(model)
+        knockout_pairs = load_knockout_pairs(model)
+
     if not args.quiet:
         print(f"Running {args.sims:,} simulations…")
     rng = np.random.default_rng(42)
-    wins: Counter[str] = Counter(sim_tournament(groups, model, rng) for _ in range(args.sims))
+    wins: Counter[str] = Counter(
+        sim_tournament(groups, model, rng, actual, knockout_pairs) for _ in range(args.sims)
+    )
 
     if args.csv:
         print("rank,team,pct")
