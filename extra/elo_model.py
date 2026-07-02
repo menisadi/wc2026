@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-DATA_DIR = Path(__file__).parent / "data" / "raw"
+DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
 
 # Pre-tournament ELO snapshot (WC 2026 group stage started 2026-06-11)
 ELO_SNAPSHOT = "2026-05-27"

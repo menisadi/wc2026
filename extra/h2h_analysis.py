@@ -27,7 +27,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-DATA_DIR = Path(__file__).parent / "data" / "raw"
+DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
 DEFAULT_RATING = 1500.0
 HOME_ADVANTAGE = 100.0
 K_MAX = 60.0

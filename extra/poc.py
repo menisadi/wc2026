@@ -12,7 +12,7 @@ import pandas as pd
 from scipy.sparse import csr_matrix, lil_matrix
 from sklearn.linear_model import PoissonRegressor
 
-DATA_DIR = Path(__file__).parent / "data" / "raw"
+DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
 
 # Name normalization: schedule CSV variants → results.csv canonical names
 SCHEDULE_NORM: dict[str, str] = {

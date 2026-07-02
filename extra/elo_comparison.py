@@ -32,7 +32,7 @@ import pandas as pd
 
 DEFAULT_INITIAL_RATING = 1500.0
 HOME_ADVANTAGE = 100.0
-DATA_DIR = Path(__file__).parent / "data" / "raw"
+DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
 
 
 def k_value(tournament: str) -> int:

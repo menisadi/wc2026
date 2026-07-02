@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DATA_DIR = Path(__file__).parent / "data" / "raw"
+DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
 
 SCHEDULE_NORM: dict[str, str] = {
     "Bosnia-Herzegovina": "Bosnia and Herzegovina",
