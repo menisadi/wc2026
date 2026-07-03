@@ -3,7 +3,7 @@ name = "wc2026"
 version = "0.1.0"
 description = "FIFA World Cup 2026 prediction model"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "pandas>=2.2",
     "numpy>=2.0",
