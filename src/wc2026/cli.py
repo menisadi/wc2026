@@ -1103,6 +1103,7 @@ def show_history(
         "-c",
         help="Reference for Δ column: 'prev' (previous snapshot) or 'first' (start of tournament)",
     ),
+    csv: bool = typer.Option(False, "--csv", help="Output results as CSV."),
 ) -> None:
     """Show how win probabilities have changed across snapshots."""
     from pathlib import Path
@@ -1126,6 +1127,13 @@ def show_history(
         if sub.empty:
             console.print(f"[red]Team not found in history:[/red] {team}")
             raise typer.Exit(1)
+        if csv:
+            print("date,win_pct,final_pct,semi_pct")
+            for _, row in sub.iterrows():
+                print(
+                    f"{row['date']},{row['win_pct']:.4f},{row['final_pct']:.4f},{row['semi_pct']:.4f}"
+                )
+            return
         table = Table(title=f"{sub.iloc[0]['team']} — win probability history", show_header=True)
         table.add_column("Date")
         table.add_column("Win %", justify="right", style="green")
@@ -1150,6 +1158,18 @@ def show_history(
     ref = df[df["date"] == ref_date].set_index("team") if ref_date else None
 
     top_teams = latest.nlargest(top, "win_pct")
+
+    if csv:
+        print("rank,team,win_pct,delta_win_pct,final_pct,semi_pct")
+        for i, (t, row) in enumerate(top_teams.iterrows(), 1):
+            if ref is not None and t in ref.index:
+                delta = f"{row['win_pct'] - ref.loc[t, 'win_pct']:.4f}"
+            else:
+                delta = ""
+            print(
+                f"{i},{t},{row['win_pct']:.4f},{delta},{row['final_pct']:.4f},{row['semi_pct']:.4f}"
+            )
+        return
 
     title = f"Win probabilities — {latest_date}"
     if ref_date:
