@@ -270,7 +270,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Per-year series
     # ------------------------------------------------------------------
-    israel = pivot.get(args.country, pd.Series(dtype=float, name=args.country))
+    country = pivot.get(args.country, pd.Series(dtype=float, name=args.country))
     compare = (
         pivot.get(args.compare, pd.Series(dtype=float, name=args.compare)) if args.compare else None
     )
@@ -367,24 +367,29 @@ def main() -> None:
         )
 
     # Highlighted country
-    ix = israel.dropna()
+    cx = country.dropna()
     ax.plot(
-        ix.index,
-        ix.values,
+        cx.index,
+        cx.values,
         color="#0038b8",
         linewidth=2.5,
         label=args.country,
         zorder=5,
     )
 
-    # Mark WC years on x-axis with light vertical lines
-    for yr in wc_years_sorted:
-        ax.axvline(yr, color="#cccccc", linewidth=0.5, zorder=1)
+    # Mark WC years on x-axis with light vertical lines (opt-in)
+    if args.wc_quantiles:
+        for yr in wc_years_sorted:
+            ax.axvline(yr, color="#cccccc", linewidth=0.5, zorder=1)
 
-    israel_start = int(ix.index.min()) if not ix.empty else first_year
-    ax.set_xlim(left=israel_start)
+    country_start = int(cx.index.min()) if not cx.empty else first_year
+    ax.set_xlim(left=country_start)
 
-    ax.set_title(f"{args.country} Elo rating vs. the world", fontsize=14, fontweight="bold")
+    if args.compare:
+        title = f"{args.country} vs. {args.compare} — Elo rating"
+    else:
+        title = f"{args.country} — Elo rating"
+    ax.set_title(title, fontsize=14, fontweight="bold")
     ax.set_xlabel("Year")
     ax.set_ylabel("Elo rating")
     ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
