@@ -53,12 +53,16 @@ _RECORD_COLUMNS = [
 ]
 
 
-def collect_match_records(min_year: int = ELO_COMPUTE_MIN_YEAR) -> pd.DataFrame:
-    """Return non-friendly, played matches tagged with pre-match ELO and residuals.
+def collect_match_records(
+    min_year: int = ELO_COMPUTE_MIN_YEAR, include_friendlies: bool = False
+) -> pd.DataFrame:
+    """Return played matches tagged with pre-match ELO and residuals.
 
     ELO comes from :func:`wc2026.data.elo.compute_prematch_elo`, so ratings match
-    ``predict-match`` and the backtests exactly. Friendlies (K == 20) are dropped,
-    and unplayed future fixtures — which ``load_results`` fills with a phantom 0-0 —
+    ``predict-match`` and the backtests exactly. Friendlies (K == 20) are dropped
+    unless ``include_friendlies`` is set — either way they already contribute to
+    the ELO ratings, since ``compute_prematch_elo`` walks the full result set.
+    Unplayed future fixtures — which ``load_results`` fills with a phantom 0-0 —
     are removed by keeping only matches dated before today.
     """
     results = load_results(min_year=min_year)
@@ -69,7 +73,8 @@ def collect_match_records(min_year: int = ELO_COMPUTE_MIN_YEAR) -> pd.DataFrame:
     df = df[df["date"].dt.date < today].copy()
 
     df["k"] = df["tournament"].map(lambda t: k_value(str(t)))
-    df = df[df["k"] > 20].copy()  # exclude friendlies
+    if not include_friendlies:
+        df = df[df["k"] > 20].copy()  # exclude friendlies
     df["weight"] = df["k"] / _K_MAX
 
     home_adv = np.where(df["neutral"].to_numpy(), 0.0, HOME_ADVANTAGE)
@@ -84,13 +89,21 @@ def collect_match_records(min_year: int = ELO_COMPUTE_MIN_YEAR) -> pd.DataFrame:
     return df[_RECORD_COLUMNS].reset_index(drop=True)
 
 
-def print_banner(records: pd.DataFrame, console: Console) -> None:
+def print_banner(records: pd.DataFrame, console: Console, include_friendlies: bool = False) -> None:
     yr_min = records["date"].dt.year.min()
     yr_max = records["date"].dt.year.max()
+    if include_friendlies:
+        label = "matches"
+        friendly_note = "friendlies included"
+        weights = "WC 1.00 · continental 0.83 · qualifiers 0.67 · other 0.50 · friendly 0.33"
+    else:
+        label = "competitive matches"
+        friendly_note = "friendlies excluded"
+        weights = "WC 1.00 · continental 0.83 · qualifiers 0.67 · other 0.50"
     console.print(
-        f"[bold]{len(records):,} competitive matches[/bold]"
-        f"  ({yr_min}–{yr_max})  ·  friendlies excluded"
-        f"  ·  weights: WC 1.00 · continental 0.83 · qualifiers 0.67 · other 0.50"
+        f"[bold]{len(records):,} {label}[/bold]"
+        f"  ({yr_min}–{yr_max})  ·  {friendly_note}"
+        f"  ·  weights: {weights}"
     )
     console.print()
 

@@ -840,13 +840,13 @@ h2h_app = typer.Typer(help="Head-to-head residual analysis over competitive matc
 app.add_typer(h2h_app, name="h2h")
 
 
-def _h2h_records():
+def _h2h_records(friendlies: bool = False):
     """Load ELO-tagged match records with a status spinner, then print the banner."""
     from wc2026.analysis.h2h import collect_match_records, print_banner
 
     with err_console.status("Loading match records…"):
-        records = collect_match_records()
-    print_banner(records, console)
+        records = collect_match_records(include_friendlies=friendlies)
+    print_banner(records, console, include_friendlies=friendlies)
     return records
 
 
@@ -863,6 +863,9 @@ def h2h_summary(
         5.0, "--min-underdog", help="Min effective games for underdog tables."
     ),
     top: int = typer.Option(20, "--top", help="Rows per table."),
+    friendlies: bool = typer.Option(
+        False, "--friendlies", help="Include friendly matches (weight 0.33)."
+    ),
 ) -> None:
     """Ranked tables: H2H bias, over-performers as underdog, favorite traps."""
     from wc2026.analysis.h2h import render_summary
@@ -872,7 +875,7 @@ def h2h_summary(
         console.print(f"[red]--sections must be from: {', '.join(sorted(valid))}[/red]")
         raise typer.Exit(1)
 
-    records = _h2h_records()
+    records = _h2h_records(friendlies)
     render_summary(
         records,
         console,
@@ -893,6 +896,9 @@ def h2h_pair(
         "--game",
         "-g",
         help="WC 2026 match number; overrides TEAM1/TEAM2. 1-72 = group stage, 73-88 = R32.",
+    ),
+    friendlies: bool = typer.Option(
+        False, "--friendlies", help="Include friendly matches (weight 0.33)."
     ),
 ) -> None:
     """Per-match history and aggregate stats for a specific pair of teams."""
@@ -926,7 +932,7 @@ def h2h_pair(
         console.print("[red]Specify either TEAM1 TEAM2 or --game N.[/red]")
         raise typer.Exit(1)
 
-    records = _h2h_records()
+    records = _h2h_records(friendlies)
     if header:
         console.print(f"[dim]{header}[/dim]\n")
     render_pair(records, console, t1=t1, t2=t2)
@@ -943,6 +949,9 @@ def h2h_profile(
     metric: str = typer.Option(
         "wdl", "--metric", help="Columns to show: wdl (default), goals, or both."
     ),
+    friendlies: bool = typer.Option(
+        False, "--friendlies", help="Include friendly matches (weight 0.33)."
+    ),
 ) -> None:
     """Performance breakdown by opponent ELO tier."""
     from wc2026.analysis.h2h import render_profile
@@ -951,7 +960,7 @@ def h2h_profile(
         console.print("[red]--metric must be 'wdl', 'goals', or 'both'[/red]")
         raise typer.Exit(1)
 
-    records = _h2h_records()
+    records = _h2h_records(friendlies)
     render_profile(records, console, team=team, gaps=gaps, metric=metric)
 
 
