@@ -7,10 +7,12 @@ current ELO difference and the score predicted by the two-threshold rule:
   gap >= high -> 3-0, gap >= low -> 2-0, gap >= 0 -> 1-0 (mirrored for aways).
   Never predicts a draw.
 
+Standalone: depends only on pandas and the two CSVs under data/raw.
+
 Usage
 -----
-  uv run python extra/elo_double_threshold.py Germany Paraguay
-  uv run python extra/elo_double_threshold.py Spain Austria --low 200 --high 400
+  uv run python extra/elo_model.py Germany Paraguay
+  uv run python extra/elo_model.py Spain Austria --low 200 --high 400
 """
 
 import argparse
@@ -24,6 +26,44 @@ DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
 ELO_SNAPSHOT = "2026-05-27"
 DEFAULT_LOW = 200
 DEFAULT_HIGH = 400
+
+# Elo update constants (inlined from wc2026.data.elo to keep this standalone).
+HOME_ADVANTAGE = 100.0
+
+
+def k_value(tournament: str) -> int:
+    """Map tournament name to an Elo K-factor (per eloratings.net conventions)."""
+    t = tournament.lower()
+    if "world cup" in t and "qualification" not in t:
+        return 60
+    if "qualification" in t or "qualifying" in t:
+        return 40
+    continental = (
+        "uefa euro",
+        "copa américa",
+        "copa america",
+        "afc asian cup",
+        "african cup of nations",
+        "africa cup of nations",
+        "concacaf gold cup",
+        "concacaf nations league",
+        "uefa nations league",
+        "confederations cup",
+    )
+    if any(c in t for c in continental):
+        return 50
+    if "friendly" in t:
+        return 20
+    return 30
+
+
+def _goal_diff_multiplier(goal_diff: int) -> float:
+    n = abs(int(goal_diff))
+    if n <= 1:
+        return 1.0
+    if n == 2:
+        return 1.5
+    return (11.0 + n) / 8.0
 
 
 def _resolve(name: str, ratings: dict[str, float]) -> str:
@@ -40,8 +80,6 @@ def _resolve(name: str, ratings: dict[str, float]) -> str:
 
 def _apply_live_updates(ratings: dict[str, float]) -> None:
     """Update ratings in-place for every completed match after ELO_SNAPSHOT."""
-    from wc2026.data.elo import HOME_ADVANTAGE, _goal_diff_multiplier, k_value
-
     results_path = DATA_DIR / "results.csv"
     if not results_path.exists():
         return
@@ -93,10 +131,12 @@ def predict(diff: float, low: int, high: int) -> tuple[int, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live two-threshold ELO predictor")
-    parser.add_argument("home", help="first / home team")
-    parser.add_argument("away", help="second / away team")
-    parser.add_argument("--low", type=int, default=DEFAULT_LOW, help=f"gap for 2-0 [{DEFAULT_LOW}]")
-    parser.add_argument(
+    _ = parser.add_argument("home", help="first / home team")
+    _ = parser.add_argument("away", help="second / away team")
+    _ = parser.add_argument(
+        "--low", type=int, default=DEFAULT_LOW, help=f"gap for 2-0 [{DEFAULT_LOW}]"
+    )
+    _ = parser.add_argument(
         "--high", type=int, default=DEFAULT_HIGH, help=f"gap for 3-0 [{DEFAULT_HIGH}]"
     )
     args = parser.parse_args()
