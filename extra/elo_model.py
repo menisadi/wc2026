@@ -17,6 +17,7 @@ Usage
 
 import argparse
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -92,17 +93,16 @@ def _apply_live_updates(ratings: dict[str, float]) -> None:
 
     fallback = float(pd.Series(list(ratings.values())).median())
     for _, row in df.iterrows():
-        home = _resolve(str(row["home_team"]), ratings)
-        away = _resolve(str(row["away_team"]), ratings)
-        gh, ga = int(row["home_score"]), int(row["away_score"])
+        home = _resolve(cast(str, row["home_team"]), ratings)
+        away = _resolve(cast(str, row["away_team"]), ratings)
+        gh, ga = int(cast(float, row["home_score"])), int(cast(float, row["away_score"]))
         rh = ratings.get(home, fallback)
         ra = ratings.get(away, fallback)
-        home_adv = 0.0 if bool(row["neutral"]) else HOME_ADVANTAGE
-        we_h = 1.0 / (1.0 + 10.0 ** (-((rh + home_adv) - ra) / 400.0))
+        home_adv = 0.0 if cast(bool, row["neutral"]) else HOME_ADVANTAGE
+        we_h = cast(float, 1.0 / (1.0 + 10.0 ** (-((rh + home_adv) - ra) / 400.0)))
         w_h = 1.0 if gh > ga else (0.5 if gh == ga else 0.0)
-        delta = (
-            k_value(str(row.get("tournament", ""))) * _goal_diff_multiplier(gh - ga) * (w_h - we_h)
-        )
+        tournament = cast(str, row.get("tournament", ""))
+        delta: float = k_value(tournament) * _goal_diff_multiplier(gh - ga) * (w_h - we_h)
         ratings[home] = rh + delta
         ratings[away] = ra - delta
 
@@ -140,20 +140,24 @@ def main() -> None:
         "--high", type=int, default=DEFAULT_HIGH, help=f"gap for 3-0 [{DEFAULT_HIGH}]"
     )
     args = parser.parse_args()
+    home_arg = cast(str, args.home)
+    away_arg = cast(str, args.away)
+    low = cast(int, args.low)
+    high = cast(int, args.high)
 
     ratings = load_ratings()
-    home = _resolve(args.home, ratings)
-    away = _resolve(args.away, ratings)
-    for arg, resolved in ((args.home, home), (args.away, away)):
+    home = _resolve(home_arg, ratings)
+    away = _resolve(away_arg, ratings)
+    for arg, resolved in ((home_arg, home), (away_arg, away)):
         if resolved not in ratings:
             raise SystemExit(f"Unknown team: '{arg}'.")
     rh, ra = ratings[home], ratings[away]
     diff = rh - ra
-    ph, pa = predict(diff, args.low, args.high)
+    ph, pa = predict(diff, low, high)
 
     print(f"\n  {home} vs {away}")
     print(f"  ELO: {rh:.0f} vs {ra:.0f}  (diff: {diff:+.0f})")
-    print(f"  Thresholds: low={args.low}  high={args.high}")
+    print(f"  Thresholds: low={low}  high={high}")
     print(f"\n  Predicted score: {ph}-{pa}\n")
 
 
