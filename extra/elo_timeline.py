@@ -47,7 +47,9 @@ def _build_pre_wc_elo(results: pd.DataFrame) -> dict[str, float]:
         h, a = row.home_team, row.away_team
         rh = elo.setdefault(h, DEFAULT_INITIAL_RATING)
         ra = elo.setdefault(a, DEFAULT_INITIAL_RATING)
-        delta = elo_delta(rh, ra, row.home_score, row.away_score, bool(row.neutral), str(row.tournament))
+        delta = elo_delta(
+            rh, ra, row.home_score, row.away_score, bool(row.neutral), str(row.tournament)
+        )
         elo[h] = rh + delta
         elo[a] = ra - delta
     return elo
@@ -66,10 +68,9 @@ def build_timeline(results: pd.DataFrame) -> pd.DataFrame:
     for t in teams:
         elo.setdefault(t, DEFAULT_INITIAL_RATING)
 
-    wc_matches = (
-        results[(results["tournament"] == TOURNAMENT_NAME) & (results["date"] >= WC_START)]
-        .sort_values("date")
-    )
+    wc_matches = results[
+        (results["tournament"] == TOURNAMENT_NAME) & (results["date"] >= WC_START)
+    ].sort_values("date")
 
     match_days = sorted(wc_matches["date"].dt.normalize().unique())
 
@@ -84,7 +85,9 @@ def build_timeline(results: pd.DataFrame) -> pd.DataFrame:
             if h not in current or a not in current:
                 continue
             rh, ra = current[h], current[a]
-            delta = elo_delta(rh, ra, row.home_score, row.away_score, bool(row.neutral), str(row.tournament))
+            delta = elo_delta(
+                rh, ra, row.home_score, row.away_score, bool(row.neutral), str(row.tournament)
+            )
             current[h] = rh + delta
             current[a] = ra - delta
 
@@ -109,7 +112,9 @@ def main() -> None:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     timeline.to_csv(args.out, index=False)
-    print(f"Written {len(timeline)} rows ({timeline['team'].nunique()} teams × {timeline['date'].nunique()} days) → {args.out}")
+    print(
+        f"Written {len(timeline)} rows ({timeline['team'].nunique()} teams × {timeline['date'].nunique()} days) → {args.out}"
+    )
 
 
 if __name__ == "__main__":

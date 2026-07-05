@@ -292,25 +292,39 @@ def main() -> None:
         label: sim_group(teams, ratings, actual) for label, teams in sorted(groups.items())
     }
 
-    r32_pairs   = knockout_pairs or build_bracket(standings)
-    r32_teams   = {t for pair in r32_pairs for t in pair}
+    r32_pairs = knockout_pairs or build_bracket(standings)
+    r32_teams = {t for pair in r32_pairs for t in pair}
     r32_winners = advance(r32_pairs, ratings, actual)
     r16_winners = advance(list(zip(r32_winners[::2], r32_winners[1::2])), ratings, actual)
-    qf_winners  = advance(list(zip(r16_winners[::2], r16_winners[1::2])), ratings, actual)
-    sf_winners  = advance(list(zip(qf_winners[::2],  qf_winners[1::2])),  ratings, actual)
-    champion    = advance([(sf_winners[0], sf_winners[1])], ratings, actual)[0]
+    qf_winners = advance(list(zip(r16_winners[::2], r16_winners[1::2])), ratings, actual)
+    sf_winners = advance(list(zip(qf_winners[::2], qf_winners[1::2])), ratings, actual)
+    champion = advance([(sf_winners[0], sf_winners[1])], ratings, actual)[0]
 
     all_group_teams = {t.team for s in standings.values() for t in s}
     exit_round: dict[str, str] = {}
-    for team in all_group_teams - r32_teams:        exit_round[team] = "Group stage"
-    for team in r32_teams - set(r32_winners):       exit_round[team] = "R32"
-    for team in set(r32_winners) - set(r16_winners):exit_round[team] = "R16"
-    for team in set(r16_winners) - set(qf_winners): exit_round[team] = "QF"
-    for team in set(qf_winners) - set(sf_winners):  exit_round[team] = "SF"
-    for team in set(sf_winners) - {champion}:       exit_round[team] = "Runner-up"
+    for team in all_group_teams - r32_teams:
+        exit_round[team] = "Group stage"
+    for team in r32_teams - set(r32_winners):
+        exit_round[team] = "R32"
+    for team in set(r32_winners) - set(r16_winners):
+        exit_round[team] = "R16"
+    for team in set(r16_winners) - set(qf_winners):
+        exit_round[team] = "QF"
+    for team in set(qf_winners) - set(sf_winners):
+        exit_round[team] = "SF"
+    for team in set(sf_winners) - {champion}:
+        exit_round[team] = "Runner-up"
     exit_round[champion] = "Champion"
 
-    round_order = {"Champion": 0, "Runner-up": 1, "SF": 2, "QF": 3, "R16": 4, "R32": 5, "Group stage": 6}
+    round_order = {
+        "Champion": 0,
+        "Runner-up": 1,
+        "SF": 2,
+        "QF": 3,
+        "R16": 4,
+        "R32": 5,
+        "Group stage": 6,
+    }
     all_teams = sorted(exit_round.items(), key=lambda x: round_order.get(x[1], 9))
 
     mode = "live ELO" if live else f"fixed ELO ({ELO_SNAPSHOT})"
