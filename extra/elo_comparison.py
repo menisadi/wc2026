@@ -7,13 +7,14 @@
 # ]
 # ///
 """
-Compute a full Elo history (no year cap by default) and plot Israel's Elo
+Compute a full Elo history (no year cap by default) and plot a country's Elo
 trajectory versus an optional comparison country, the global median, and WC-participant quantiles.
 
 Usage:
-    uv run python israel_elo_vs_world.py
-    uv run python israel_elo_vs_world.py --min-year 1940
-    uv run python israel_elo_vs_world.py --output my_plot.png
+    uv run python elo_comparison.py --country Israel
+    uv run python elo_comparison.py --country Israel --compare Brazil
+    uv run python elo_comparison.py --country Israel --global-median --wc-quantiles
+    uv run python elo_comparison.py --country France --min-year 1960 --output france.png
 """
 
 from __future__ import annotations
@@ -185,8 +186,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--output",
-        default="israel_elo_vs_world.png",
-        help="Output image path (default: israel_elo_vs_world.png)",
+        default=None,
+        help="Output image path (default: <country>_elo.png)",
     )
     parser.add_argument(
         "--plot",
@@ -209,13 +210,25 @@ def main() -> None:
     )
     parser.add_argument(
         "--country",
-        default="Israel",
-        help="Country to highlight and analyse (default: Israel)",
+        required=True,
+        help="Primary country to highlight and analyse",
     )
     parser.add_argument(
         "--compare",
         default=None,
         help="Second country to overlay on the plot (default: none)",
+    )
+    parser.add_argument(
+        "--global-median",
+        action="store_true",
+        default=False,
+        help="Overlay the global median Elo line (default: off)",
+    )
+    parser.add_argument(
+        "--wc-quantiles",
+        action="store_true",
+        default=False,
+        help="Overlay WC-participant min and 25th-pct lines (default: off)",
     )
     parser.add_argument(
         "-q",
@@ -225,6 +238,8 @@ def main() -> None:
         help="Suppress progress messages",
     )
     args = parser.parse_args()
+    if args.output is None:
+        args.output = f"{args.country.lower().replace(' ', '_')}_elo.png"
 
     # ------------------------------------------------------------------
     # Load & optionally filter results
@@ -269,17 +284,18 @@ def main() -> None:
     wc_min: list[float] = []
     wc_p25: list[float] = []
 
-    for wc_yr in wc_years_sorted:
-        if wc_yr not in pivot.index:
-            continue
-        teams = list(wc_lookup[wc_yr])
-        available = [t for t in teams if t in pivot.columns]
-        ratings = pivot.loc[wc_yr, available].dropna().values
-        if len(ratings) == 0:
-            continue
-        wc_x.append(wc_yr)
-        wc_min.append(float(np.min(ratings)))
-        wc_p25.append(float(np.percentile(ratings, 25)))
+    if args.wc_quantiles:
+        for wc_yr in wc_years_sorted:
+            if wc_yr not in pivot.index:
+                continue
+            teams = list(wc_lookup[wc_yr])
+            available = [t for t in teams if t in pivot.columns]
+            ratings = pivot.loc[wc_yr, available].dropna().values
+            if len(ratings) == 0:
+                continue
+            wc_x.append(wc_yr)
+            wc_min.append(float(np.min(ratings)))
+            wc_p25.append(float(np.percentile(ratings, 25)))
 
     if not args.plot:
         return
@@ -289,52 +305,54 @@ def main() -> None:
     # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(14, 6))
 
-    # Global median
-    ax.plot(
-        global_median.index,
-        global_median.values,
-        color="#aaaaaa",
-        linewidth=1.2,
-        linestyle="--",
-        label="Global median",
-        zorder=2,
-    )
+    # Global median (opt-in)
+    if args.global_median:
+        ax.plot(
+            global_median.index,
+            global_median.values,
+            color="#aaaaaa",
+            linewidth=1.2,
+            linestyle="--",
+            label="Global median",
+            zorder=2,
+        )
 
-    # WC quantiles — dashed lines + markers every 4 years
-    ax.plot(
-        wc_x,
-        wc_p25,
-        color="#e09c20",
-        linewidth=1.2,
-        linestyle="--",
-        zorder=3,
-    )
-    ax.scatter(
-        wc_x,
-        wc_p25,
-        marker="^",
-        s=55,
-        color="#e09c20",
-        zorder=4,
-        label="WC teams — 25th pct (end of year)",
-    )
-    ax.plot(
-        wc_x,
-        wc_min,
-        color="#cc4444",
-        linewidth=1.2,
-        linestyle="--",
-        zorder=3,
-    )
-    ax.scatter(
-        wc_x,
-        wc_min,
-        marker="v",
-        s=55,
-        color="#cc4444",
-        zorder=4,
-        label="WC teams — min (end of year)",
-    )
+    # WC quantiles — dashed lines + markers every 4 years (opt-in)
+    if args.wc_quantiles:
+        ax.plot(
+            wc_x,
+            wc_p25,
+            color="#e09c20",
+            linewidth=1.2,
+            linestyle="--",
+            zorder=3,
+        )
+        ax.scatter(
+            wc_x,
+            wc_p25,
+            marker="^",
+            s=55,
+            color="#e09c20",
+            zorder=4,
+            label="WC teams — 25th pct (end of year)",
+        )
+        ax.plot(
+            wc_x,
+            wc_min,
+            color="#cc4444",
+            linewidth=1.2,
+            linestyle="--",
+            zorder=3,
+        )
+        ax.scatter(
+            wc_x,
+            wc_min,
+            marker="v",
+            s=55,
+            color="#cc4444",
+            zorder=4,
+            label="WC teams — min (end of year)",
+        )
 
     # Comparison country (optional)
     if compare is not None:
