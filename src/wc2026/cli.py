@@ -836,6 +836,125 @@ def betting_backtest(
     console.print("[dim]Pts = stage-weighted total · exact/outcome/misses = raw counts[/dim]")
 
 
+h2h_app = typer.Typer(help="Head-to-head residual analysis over competitive matches.")
+app.add_typer(h2h_app, name="h2h")
+
+
+def _h2h_records():
+    """Load ELO-tagged match records with a status spinner, then print the banner."""
+    from wc2026.analysis.h2h import collect_match_records, print_banner
+
+    with err_console.status("Loading match records…"):
+        records = collect_match_records()
+    print_banner(records, console)
+    return records
+
+
+@h2h_app.command("summary")
+def h2h_summary(
+    sections: list[str] = typer.Option(
+        ["h2h", "crypto", "traps"],
+        "--sections",
+        help="Sections to print: h2h, crypto, traps. Default: all.",
+    ),
+    elo_gap: float = typer.Option(100.0, "--elo-gap", help="Min ELO gap for the underdog tables."),
+    min_h2h: float = typer.Option(3.0, "--min-h2h", help="Min effective games for H2H bias."),
+    min_underdog: float = typer.Option(
+        5.0, "--min-underdog", help="Min effective games for underdog tables."
+    ),
+    top: int = typer.Option(20, "--top", help="Rows per table."),
+) -> None:
+    """Ranked tables: H2H bias, over-performers as underdog, favorite traps."""
+    from wc2026.analysis.h2h import render_summary
+
+    valid = {"h2h", "crypto", "traps"}
+    if not set(sections) <= valid:
+        console.print(f"[red]--sections must be from: {', '.join(sorted(valid))}[/red]")
+        raise typer.Exit(1)
+
+    records = _h2h_records()
+    render_summary(
+        records,
+        console,
+        sections=sections,
+        elo_gap=elo_gap,
+        min_h2h=min_h2h,
+        min_underdog=min_underdog,
+        top=top,
+    )
+
+
+@h2h_app.command("pair")
+def h2h_pair(
+    team1: str = typer.Argument(None, help="First team (canonical name)."),
+    team2: str = typer.Argument(None, help="Second team."),
+    game: int = typer.Option(
+        None,
+        "--game",
+        "-g",
+        help="WC 2026 match number; overrides TEAM1/TEAM2. 1-72 = group stage, 73-88 = R32.",
+    ),
+) -> None:
+    """Per-match history and aggregate stats for a specific pair of teams."""
+    from wc2026.analysis.h2h import render_pair
+    from wc2026.data.loader import load_knockout_fixtures, load_schedule
+
+    header = ""
+    if game is not None and game > 72:
+        fixtures = load_knockout_fixtures()
+        if game not in fixtures:
+            drawn = sorted(fixtures)
+            avail = f"{drawn[0]}-{drawn[-1]}" if drawn else "none drawn yet"
+            console.print(
+                f"[red]--game {game} is not a drawn knockout fixture[/red] (available: {avail})."
+            )
+            raise typer.Exit(1)
+        t1, t2 = fixtures[game]
+        header = f"Match {game} (R32): {t1} vs {t2}"
+    elif game is not None:
+        schedule = load_schedule()
+        group_games = schedule[schedule["Round"] == "Group stage"].reset_index(drop=True)
+        if not 1 <= game <= len(group_games):
+            console.print(f"[red]--game must be 1-{len(group_games)} (group) or 73-88 (R32).[/red]")
+            raise typer.Exit(1)
+        row = group_games.iloc[game - 1]
+        t1, t2 = str(row["home_team"]), str(row["away_team"])
+        header = f"Game {game}: {t1} vs {t2}"
+    elif team1 and team2:
+        t1, t2 = team1, team2
+    else:
+        console.print("[red]Specify either TEAM1 TEAM2 or --game N.[/red]")
+        raise typer.Exit(1)
+
+    records = _h2h_records()
+    if header:
+        console.print(f"[dim]{header}[/dim]\n")
+    render_pair(records, console, t1=t1, t2=t2)
+
+
+@h2h_app.command("profile")
+def h2h_profile(
+    team: str = typer.Argument(..., help="Team to profile (canonical name)."),
+    gaps: tuple[float, float] = typer.Option(
+        (100.0, 250.0),
+        "--gaps",
+        help="Two ELO thresholds separating Even / Favored / Dominant (default 100 250).",
+    ),
+    metric: str = typer.Option(
+        "wdl", "--metric", help="Columns to show: wdl (default), goals, or both."
+    ),
+) -> None:
+    """Performance breakdown by opponent ELO tier."""
+    from wc2026.analysis.h2h import render_profile
+
+    if metric not in ("wdl", "goals", "both"):
+        console.print("[red]--metric must be 'wdl', 'goals', or 'both'[/red]")
+        raise typer.Exit(1)
+
+    records = _h2h_records()
+    render_profile(records, console, team=team, gaps=gaps, metric=metric)
+
+
 @app.command("refresh-data")
 def refresh_data(
     live: bool = typer.Option(
