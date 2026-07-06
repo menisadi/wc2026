@@ -149,6 +149,7 @@ def simulate_knockout_round(
     model: PoissonModel,
     rng: np.random.Generator,
     actual_results: ActualResults | None = None,
+    draw_winners: dict[tuple[str, str], str] | None = None,
 ) -> list[str]:
     """Simulate one knockout round, return list of winners."""
     winners: list[str] = []
@@ -158,7 +159,11 @@ def simulate_knockout_round(
             if ga != gb:
                 winners.append(ta if ga > gb else tb)
             else:
-                winners.append(ta if rng.random() < 0.5 else tb)
+                # Drawn after 120 min — use recorded penalty winner if available.
+                if draw_winners and (ta, tb) in draw_winners:
+                    winners.append(draw_winners[(ta, tb)])
+                else:
+                    winners.append(ta if rng.random() < 0.5 else tb)
         else:
             winner, _ = model.simulate_knockout_match(ta, tb, rng)
             winners.append(winner)
@@ -242,12 +247,15 @@ def run_monte_carlo(
     seed: int | None = None,
     actual_results: ActualResults | None = None,
     r32_override: list[tuple[str, str]] | None = None,
+    draw_winners: dict[tuple[str, str], str] | None = None,
 ) -> SimulationResults:
     """Monte Carlo tournament simulation.
 
     `r32_override`, when given, fixes the Round-of-32 matchups to the real draw instead
     of building an approximate bracket from simulated standings — use it once the group
     stage is over (see loader.load_knockout_bracket).
+    `draw_winners`, when given, resolves penalty-decided knockout draws using the actual
+    winner instead of a coin flip (see loader.load_knockout_draw_winners).
     """
     rng = np.random.default_rng(seed)
     results = SimulationResults(n_simulations=n)
@@ -269,28 +277,30 @@ def run_monte_carlo(
         for t in r32_teams:
             results.r32_counts[t] = results.r32_counts.get(t, 0) + 1
 
-        r16_teams = simulate_knockout_round(r32_pairs, model, rng, actual_results)
+        r16_teams = simulate_knockout_round(r32_pairs, model, rng, actual_results, draw_winners)
         for t in r16_teams:
             results.r16_counts[t] = results.r16_counts.get(t, 0) + 1
 
         qf_teams = simulate_knockout_round(
-            pairs_from_winners(r16_teams), model, rng, actual_results
+            pairs_from_winners(r16_teams), model, rng, actual_results, draw_winners
         )
         for t in qf_teams:
             results.qf_counts[t] = results.qf_counts.get(t, 0) + 1
 
-        sf_teams = simulate_knockout_round(pairs_from_winners(qf_teams), model, rng, actual_results)
+        sf_teams = simulate_knockout_round(
+            pairs_from_winners(qf_teams), model, rng, actual_results, draw_winners
+        )
         for t in sf_teams:
             results.sf_counts[t] = results.sf_counts.get(t, 0) + 1
 
         finalists = simulate_knockout_round(
-            pairs_from_winners(sf_teams), model, rng, actual_results
+            pairs_from_winners(sf_teams), model, rng, actual_results, draw_winners
         )
         for t in finalists:
             results.final_counts[t] = results.final_counts.get(t, 0) + 1
 
         champion = simulate_knockout_round(
-            pairs_from_winners(finalists), model, rng, actual_results
+            pairs_from_winners(finalists), model, rng, actual_results, draw_winners
         )[0]
         results.win_counts[champion] = results.win_counts.get(champion, 0) + 1
 

@@ -316,16 +316,27 @@ def simulate(
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Run a full Monte Carlo tournament simulation."""
-    from wc2026.data.loader import load_knockout_bracket, load_wc2026_results
+    from wc2026.data.loader import (
+        load_knockout_bracket,
+        load_knockout_draw_winners,
+        load_wc2026_results,
+    )
     from wc2026.simulate.tournament import run_monte_carlo
 
     model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
     actual = load_wc2026_results()
     r32 = load_knockout_bracket()
+    draw_winners = load_knockout_draw_winners()
 
     with _status(f"Running {simulations:,} simulations…", quiet):
         sim = run_monte_carlo(
-            groups, model, n=simulations, seed=seed, actual_results=actual, r32_override=r32
+            groups,
+            model,
+            n=simulations,
+            seed=seed,
+            actual_results=actual,
+            r32_override=r32,
+            draw_winners=draw_winners,
         )
 
     ranked = sim.sorted_by_win_prob()
@@ -375,15 +386,18 @@ def top_scorer(
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
 ) -> None:
     """Predict top goal scorer candidates based on recent form + team advancement probability."""
-    from wc2026.data.loader import load_goalscorers, load_wc2026_results
+    from wc2026.data.loader import load_goalscorers, load_knockout_draw_winners, load_wc2026_results
     from wc2026.simulate.tournament import run_monte_carlo
 
     model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
     actual = load_wc2026_results()
+    draw_winners = load_knockout_draw_winners()
 
     with _status("Loading goalscorers and running simulations…", quiet):
         goals_df = load_goalscorers(min_year=2021)
-        sim = run_monte_carlo(groups, model, n=simulations, actual_results=actual)
+        sim = run_monte_carlo(
+            groups, model, n=simulations, actual_results=actual, draw_winners=draw_winners
+        )
 
     # Goals per player per international game (2021+)
     from wc2026.data.loader import SCHEDULE_TO_CANONICAL, load_results
@@ -1092,6 +1106,7 @@ def snapshot(
         DATA_DIR,
         RESULTS_TO_CANONICAL,
         load_knockout_bracket,
+        load_knockout_draw_winners,
         load_wc2026_results,
     )
     from wc2026.simulate.tournament import run_monte_carlo
@@ -1118,6 +1133,8 @@ def snapshot(
     existing_dates: set[str] = set()
     if history_path.exists():
         existing_dates = set(pd.read_csv(history_path)["date"].unique())
+
+    draw_winners = load_knockout_draw_winners()
 
     # --- backfill missing past match days ---
     if not no_backfill:
@@ -1157,7 +1174,12 @@ def snapshot(
 
                     with _status(f"Backfilling {date_str} ({len(subset)} results)…", quiet):
                         sim = run_monte_carlo(
-                            groups, model, n=simulations, seed=seed, actual_results=actual
+                            groups,
+                            model,
+                            n=simulations,
+                            seed=seed,
+                            actual_results=actual,
+                            draw_winners=draw_winners,
                         )
 
                     ranked = sim.sorted_by_win_prob()
@@ -1188,7 +1210,13 @@ def snapshot(
 
         with _status(f"Running {simulations:,} simulations…", quiet):
             sim = run_monte_carlo(
-                groups, model, n=simulations, seed=seed, actual_results=actual, r32_override=r32
+                groups,
+                model,
+                n=simulations,
+                seed=seed,
+                actual_results=actual,
+                r32_override=r32,
+                draw_winners=draw_winners,
             )
 
         ranked = sim.sorted_by_win_prob()

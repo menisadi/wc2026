@@ -11,7 +11,7 @@ from typing import Any
 
 import pandas as pd
 
-from wc2026.data.loader import DATA_DIR, RESULTS_TO_CANONICAL
+from wc2026.data.loader import DATA_DIR, KNOCKOUT_DRAW_WINNERS_PATH, RESULTS_TO_CANONICAL
 
 _API_BASE = "https://api.football-data.org/v4"
 _WC_SEASON = "2026"
@@ -209,6 +209,20 @@ def _drop_phantoms(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(index=to_drop).drop(columns=["_h", "_a"]).reset_index(drop=True)
 
 
+def _record_draw_winner(home: str, away: str, winner: str) -> None:
+    """Upsert a penalty-shootout winner into knockout_draw_winners.csv."""
+    existing: dict[tuple[str, str], str] = {}
+    if KNOCKOUT_DRAW_WINNERS_PATH.exists():
+        df = pd.read_csv(KNOCKOUT_DRAW_WINNERS_PATH)
+        for _, r in df.iterrows():
+            existing[(str(r["home"]), str(r["away"]))] = str(r["winner"])
+
+    existing[(home, away)] = winner
+
+    rows = [{"home": h, "away": a, "winner": w} for (h, a), w in existing.items()]
+    pd.DataFrame(rows).to_csv(KNOCKOUT_DRAW_WINNERS_PATH, index=False)
+
+
 def patch_results_csv() -> int:
     """
     Fetch finished WC 2026 matches and fill their scores into results.csv.
@@ -245,6 +259,12 @@ def patch_results_csv() -> int:
             et = score_obj.get("extraTime") or {}
             h_score = (reg.get("home") or 0) + (et.get("home") or 0)
             a_score = (reg.get("away") or 0) + (et.get("away") or 0)
+            # Record the actual winner (decided by penalties) for the simulator.
+            winner_side = score_obj.get("winner")
+            if winner_side == "HOME_TEAM":
+                _record_draw_winner(home, away, home)
+            elif winner_side == "AWAY_TEAM":
+                _record_draw_winner(home, away, away)
         else:
             h_score = score_obj["fullTime"]["home"]
             a_score = score_obj["fullTime"]["away"]

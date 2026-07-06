@@ -5,6 +5,8 @@ import pandas as pd
 DATA_DIR = Path(__file__).parents[3] / "data" / "raw"
 # Knockout bracket lives outside raw/ — it is hand-curated, not a downloaded dataset.
 KNOCKOUT_BRACKET_PATH = Path(__file__).parents[3] / "data" / "knockout_bracket.csv"
+# Penalty-shootout winners — populated by live.py / refresh-data.
+KNOCKOUT_DRAW_WINNERS_PATH = Path(__file__).parents[3] / "data" / "knockout_draw_winners.csv"
 
 # Map names used in schedule_2026.csv → names used in results.csv (canonical)
 SCHEDULE_TO_CANONICAL: dict[str, str] = {
@@ -126,6 +128,21 @@ def load_knockout_bracket() -> list[tuple[str, str]] | None:
         away = _normalize(str(row["away"]), RESULTS_TO_CANONICAL)
         pairs.append((home, away))
     return pairs
+
+
+def load_knockout_draw_winners() -> dict[tuple[str, str], str]:
+    """Return {(home, away): winner, (away, home): winner} for penalty-decided knockout matches."""
+    if not KNOCKOUT_DRAW_WINNERS_PATH.exists():
+        return {}
+    df = pd.read_csv(KNOCKOUT_DRAW_WINNERS_PATH)
+    out: dict[tuple[str, str], str] = {}
+    for _, row in df.iterrows():
+        h = _normalize(str(row["home"]), RESULTS_TO_CANONICAL)
+        a = _normalize(str(row["away"]), RESULTS_TO_CANONICAL)
+        w = _normalize(str(row["winner"]), RESULTS_TO_CANONICAL)
+        out[(h, a)] = w
+        out[(a, h)] = w
+    return out
 
 
 def load_knockout_fixtures() -> dict[int, tuple[str, str]]:
