@@ -231,6 +231,13 @@ def main() -> None:
         help="Overlay WC-participant min and 25th-pct lines (default: off)",
     )
     parser.add_argument(
+        "--smooth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Apply an N-year rolling average to plotted lines (default: off)",
+    )
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -303,13 +310,18 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Plot
     # ------------------------------------------------------------------
+    def smooth(s: pd.Series) -> pd.Series:
+        if args.smooth:
+            return s.rolling(args.smooth, min_periods=1, center=True).mean()
+        return s
+
     fig, ax = plt.subplots(figsize=(14, 6))
 
     # Global median (opt-in)
     if args.global_median:
         ax.plot(
             global_median.index,
-            global_median.values,
+            smooth(global_median).values,
             color="#aaaaaa",
             linewidth=1.2,
             linestyle="--",
@@ -359,7 +371,7 @@ def main() -> None:
         bx = compare.dropna()
         ax.plot(
             bx.index,
-            bx.values,
+            smooth(bx).values,
             color="#009c3b",
             linewidth=2.0,
             label=args.compare,
@@ -370,7 +382,7 @@ def main() -> None:
     cx = country.dropna()
     ax.plot(
         cx.index,
-        cx.values,
+        smooth(cx).values,
         color="#0038b8",
         linewidth=2.5,
         label=args.country,
