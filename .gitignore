@@ -12,6 +12,8 @@ wheels/
 # Downloaded data (reproducible via `wc2026 refresh-data`)
 data/raw/
 data/elo_history_computed.csv
+data/elo_wc2026_timeline.csv
+data/my_bets.csv
 
 # Secrets
 .env
