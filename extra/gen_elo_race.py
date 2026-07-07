@@ -21,7 +21,64 @@ from pathlib import Path
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# HTML template — DATES, DATA, ELO_MIN, ELO_MAX, SCRUB_MAX injected at build
+# Flag-inspired colors — one per WC 2026 team, chosen for dark-bg legibility.
+# Creative license used where the literal flag color would be invisible or
+# clash badly (e.g. Netherlands → orange, not the red/white/blue tricolor).
+# ---------------------------------------------------------------------------
+
+FLAG_COLORS: dict[str, str] = {
+    "Algeria":                "hsl(145,65%,46%)",  # green (large green half)
+    "Argentina":              "hsl(204,65%,60%)",  # celeste sky blue
+    "Australia":              "hsl(218,72%,44%)",  # blue (Union Jack)
+    "Austria":                "hsl(0,78%,50%)",    # red
+    "Belgium":                "hsl(45,95%,52%)",   # gold
+    "Bosnia and Herzegovina": "hsl(222,68%,46%)",  # blue with yellow diagonal
+    "Brazil":                 "hsl(134,68%,38%)",  # green
+    "Canada":                 "hsl(355,82%,50%)",  # maple red
+    "Cape Verde":             "hsl(212,75%,50%)",  # cobalt blue
+    "Colombia":               "hsl(48,92%,52%)",   # yellow (top stripe)
+    "Croatia":                "hsl(8,80%,52%)",    # orange-red checkerboard
+    "Curaçao":                "hsl(196,80%,52%)",  # cyan-blue
+    "Czech Republic":         "hsl(226,72%,48%)",  # blue (V wedge)
+    "DR Congo":               "hsl(205,80%,50%)",  # cerulean blue
+    "Ecuador":                "hsl(50,90%,50%)",   # yellow
+    "Egypt":                  "hsl(42,85%,52%)",   # amber (eagle of Saladin)
+    "England":                "hsl(354,80%,52%)",  # St George red
+    "France":                 "hsl(225,78%,44%)",  # blue
+    "Germany":                "hsl(42,94%,50%)",   # gold
+    "Ghana":                  "hsl(138,62%,38%)",  # green (bottom stripe)
+    "Haiti":                  "hsl(218,68%,44%)",  # blue (top half)
+    "Iran":                   "hsl(132,62%,42%)",  # green
+    "Iraq":                   "hsl(148,60%,38%)",  # green (text/stripe)
+    "Ivory Coast":            "hsl(28,90%,55%)",   # orange
+    "Japan":                  "hsl(358,82%,48%)",  # crimson disc
+    "Jordan":                 "hsl(118,55%,40%)",  # green
+    "Mexico":                 "hsl(158,65%,36%)",  # dark green
+    "Morocco":                "hsl(354,75%,46%)",  # red
+    "Netherlands":            "hsl(28,95%,56%)",   # Oranje (football identity)
+    "New Zealand":            "hsl(222,80%,40%)",  # navy blue
+    "Norway":                 "hsl(2,76%,50%)",    # red
+    "Panama":                 "hsl(214,70%,48%)",  # blue (one quarter)
+    "Paraguay":               "hsl(208,68%,50%)",  # blue (horizontal stripe)
+    "Portugal":               "hsl(140,70%,36%)",  # green (left half)
+    "Qatar":                  "hsl(344,68%,38%)",  # maroon
+    "Saudi Arabia":           "hsl(150,65%,36%)",  # green
+    "Scotland":               "hsl(234,70%,48%)",  # blue (saltire)
+    "Senegal":                "hsl(128,62%,42%)",  # green
+    "South Africa":           "hsl(78,65%,40%)",   # yellow-green (Y stripe)
+    "South Korea":            "hsl(210,72%,50%)",  # blue (taeguk lower half)
+    "Spain":                  "hsl(0,82%,46%)",    # red (La Roja)
+    "Sweden":                 "hsl(45,88%,52%)",   # yellow cross
+    "Switzerland":            "hsl(0,80%,48%)",    # red
+    "Tunisia":                "hsl(356,75%,50%)",  # red
+    "Turkey":                 "hsl(352,80%,50%)",  # red
+    "United States":          "hsl(230,68%,42%)",  # navy blue
+    "Uruguay":                "hsl(200,65%,55%)",  # light blue (celeste)
+    "Uzbekistan":             "hsl(192,68%,50%)",  # sky blue
+}
+
+# ---------------------------------------------------------------------------
+# HTML template — DATES, DATA, ELO_MIN, ELO_MAX, SCRUB_MAX, TEAM_COLORS injected
 # ---------------------------------------------------------------------------
 
 _TEMPLATE = """\
@@ -238,12 +295,13 @@ teams.forEach(team => {
   };
 });
 
-function barColor(rank) {
-  const h = Math.round(48 + (rank - 1) / (TOP_N - 1) * 152);
-  const s = rank === 1 ? 96 : 88;
-  const l = rank === 1 ? 52 : 50;
-  return 'hsl(' + h + ',' + s + '%,' + l + '%)';
-}
+const teamColors = TEAM_COLORS_JSON;
+// fallback for any team not in the map
+[...teams].sort().forEach((t, i, arr) => {
+  if (!teamColors[t]) {
+    teamColors[t] = 'hsl(' + Math.round(i / arr.length * 360) + ',72%,55%)';
+  }
+});
 
 function fmtDate(d) {
   const parts = d.split('-').map(Number);
@@ -267,9 +325,9 @@ function render(i) {
       r.el.style.height  = barH + 'px';
       r.rk.textContent   = rank;
       r.rk.style.color   = rank <= 3 ? 'var(--accent)' : 'var(--dim)';
-      r.nm.style.color   = rank === 1 ? 'var(--accent)' : 'var(--text)';
+      r.nm.style.color   = 'var(--text)';
       r.bar.style.width  = pct.toFixed(2) + '%';
-      r.bar.style.backgroundColor = barColor(rank);
+      r.bar.style.backgroundColor = teamColors[team];
       r.val.style.left   = 'calc(' + pct.toFixed(2) + '% + 4px)';
       r.val.textContent  = elo.toFixed(0);
     } else {
@@ -353,9 +411,12 @@ def build(dates: list[str], data: dict[str, list[float]]) -> str:
     elo_max = math.ceil(max(all_elos) + 50)
     n = len(dates)
 
+    team_colors = {t: FLAG_COLORS.get(t, "") for t in data}
+
     return (
         _TEMPLATE.replace("DATES_JSON", json.dumps(dates, separators=(",", ":")))
         .replace("DATA_JSON", _data_to_js(data))
+        .replace("TEAM_COLORS_JSON", json.dumps(team_colors, ensure_ascii=False))
         .replace("SCRUB_MAX", str(n - 1))
         .replace("N_DAYS", str(n))
         .replace("ELO_MIN_VAL", str(elo_min))
