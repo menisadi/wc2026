@@ -74,8 +74,8 @@ def _apply_live_updates(ratings: dict[str, float]) -> None:
         home = _resolve(str(row["home_team"]))
         away = _resolve(str(row["away_team"]))
         gh, ga = int(row["home_score"]), int(row["away_score"])
-        neutral = bool(row["neutral"])
         tournament = str(row.get("tournament", ""))
+        neutral = bool(row["neutral"]) or "World Cup" in tournament
 
         rh = ratings.get(home, fallback)
         ra = ratings.get(away, fallback)
