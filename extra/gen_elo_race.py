@@ -27,54 +27,54 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 FLAG_COLORS: dict[str, str] = {
-    "Algeria":                "hsl(145,65%,46%)",  # green (large green half)
-    "Argentina":              "hsl(204,65%,60%)",  # celeste sky blue
-    "Australia":              "hsl(218,72%,44%)",  # blue (Union Jack)
-    "Austria":                "hsl(0,78%,50%)",    # red
-    "Belgium":                "hsl(45,95%,52%)",   # gold
+    "Algeria": "hsl(145,65%,46%)",  # green (large green half)
+    "Argentina": "hsl(204,65%,60%)",  # celeste sky blue
+    "Australia": "hsl(218,72%,44%)",  # blue (Union Jack)
+    "Austria": "hsl(0,78%,50%)",  # red
+    "Belgium": "hsl(45,95%,52%)",  # gold
     "Bosnia and Herzegovina": "hsl(222,68%,46%)",  # blue with yellow diagonal
-    "Brazil":                 "hsl(134,68%,38%)",  # green
-    "Canada":                 "hsl(355,82%,50%)",  # maple red
-    "Cape Verde":             "hsl(212,75%,50%)",  # cobalt blue
-    "Colombia":               "hsl(48,92%,52%)",   # yellow (top stripe)
-    "Croatia":                "hsl(8,80%,52%)",    # orange-red checkerboard
-    "Curaçao":                "hsl(196,80%,52%)",  # cyan-blue
-    "Czech Republic":         "hsl(226,72%,48%)",  # blue (V wedge)
-    "DR Congo":               "hsl(205,80%,50%)",  # cerulean blue
-    "Ecuador":                "hsl(50,90%,50%)",   # yellow
-    "Egypt":                  "hsl(42,85%,52%)",   # amber (eagle of Saladin)
-    "England":                "hsl(354,80%,52%)",  # St George red
-    "France":                 "hsl(225,78%,44%)",  # blue
-    "Germany":                "hsl(42,94%,50%)",   # gold
-    "Ghana":                  "hsl(138,62%,38%)",  # green (bottom stripe)
-    "Haiti":                  "hsl(218,68%,44%)",  # blue (top half)
-    "Iran":                   "hsl(132,62%,42%)",  # green
-    "Iraq":                   "hsl(148,60%,38%)",  # green (text/stripe)
-    "Ivory Coast":            "hsl(28,90%,55%)",   # orange
-    "Japan":                  "hsl(358,82%,48%)",  # crimson disc
-    "Jordan":                 "hsl(118,55%,40%)",  # green
-    "Mexico":                 "hsl(158,65%,36%)",  # dark green
-    "Morocco":                "hsl(354,75%,46%)",  # red
-    "Netherlands":            "hsl(28,95%,56%)",   # Oranje (football identity)
-    "New Zealand":            "hsl(222,80%,40%)",  # navy blue
-    "Norway":                 "hsl(2,76%,50%)",    # red
-    "Panama":                 "hsl(214,70%,48%)",  # blue (one quarter)
-    "Paraguay":               "hsl(208,68%,50%)",  # blue (horizontal stripe)
-    "Portugal":               "hsl(140,70%,36%)",  # green (left half)
-    "Qatar":                  "hsl(344,68%,38%)",  # maroon
-    "Saudi Arabia":           "hsl(150,65%,36%)",  # green
-    "Scotland":               "hsl(234,70%,48%)",  # blue (saltire)
-    "Senegal":                "hsl(128,62%,42%)",  # green
-    "South Africa":           "hsl(78,65%,40%)",   # yellow-green (Y stripe)
-    "South Korea":            "hsl(210,72%,50%)",  # blue (taeguk lower half)
-    "Spain":                  "hsl(0,82%,46%)",    # red (La Roja)
-    "Sweden":                 "hsl(45,88%,52%)",   # yellow cross
-    "Switzerland":            "hsl(0,80%,48%)",    # red
-    "Tunisia":                "hsl(356,75%,50%)",  # red
-    "Turkey":                 "hsl(352,80%,50%)",  # red
-    "United States":          "hsl(230,68%,42%)",  # navy blue
-    "Uruguay":                "hsl(200,65%,55%)",  # light blue (celeste)
-    "Uzbekistan":             "hsl(192,68%,50%)",  # sky blue
+    "Brazil": "hsl(134,68%,38%)",  # green
+    "Canada": "hsl(355,82%,50%)",  # maple red
+    "Cape Verde": "hsl(212,75%,50%)",  # cobalt blue
+    "Colombia": "hsl(48,92%,52%)",  # yellow (top stripe)
+    "Croatia": "hsl(8,80%,52%)",  # orange-red checkerboard
+    "Curaçao": "hsl(196,80%,52%)",  # cyan-blue
+    "Czech Republic": "hsl(226,72%,48%)",  # blue (V wedge)
+    "DR Congo": "hsl(205,80%,50%)",  # cerulean blue
+    "Ecuador": "hsl(50,90%,50%)",  # yellow
+    "Egypt": "hsl(42,85%,52%)",  # amber (eagle of Saladin)
+    "England": "hsl(354,80%,52%)",  # St George red
+    "France": "hsl(225,78%,44%)",  # blue
+    "Germany": "hsl(42,94%,50%)",  # gold
+    "Ghana": "hsl(138,62%,38%)",  # green (bottom stripe)
+    "Haiti": "hsl(218,68%,44%)",  # blue (top half)
+    "Iran": "hsl(132,62%,42%)",  # green
+    "Iraq": "hsl(148,60%,38%)",  # green (text/stripe)
+    "Ivory Coast": "hsl(28,90%,55%)",  # orange
+    "Japan": "hsl(358,82%,48%)",  # crimson disc
+    "Jordan": "hsl(118,55%,40%)",  # green
+    "Mexico": "hsl(158,65%,36%)",  # dark green
+    "Morocco": "hsl(354,75%,46%)",  # red
+    "Netherlands": "hsl(28,95%,56%)",  # Oranje (football identity)
+    "New Zealand": "hsl(222,80%,40%)",  # navy blue
+    "Norway": "hsl(2,76%,50%)",  # red
+    "Panama": "hsl(214,70%,48%)",  # blue (one quarter)
+    "Paraguay": "hsl(208,68%,50%)",  # blue (horizontal stripe)
+    "Portugal": "hsl(140,70%,36%)",  # green (left half)
+    "Qatar": "hsl(344,68%,38%)",  # maroon
+    "Saudi Arabia": "hsl(150,65%,36%)",  # green
+    "Scotland": "hsl(234,70%,48%)",  # blue (saltire)
+    "Senegal": "hsl(128,62%,42%)",  # green
+    "South Africa": "hsl(78,65%,40%)",  # yellow-green (Y stripe)
+    "South Korea": "hsl(210,72%,50%)",  # blue (taeguk lower half)
+    "Spain": "hsl(0,82%,46%)",  # red (La Roja)
+    "Sweden": "hsl(45,88%,52%)",  # yellow cross
+    "Switzerland": "hsl(0,80%,48%)",  # red
+    "Tunisia": "hsl(356,75%,50%)",  # red
+    "Turkey": "hsl(352,80%,50%)",  # red
+    "United States": "hsl(230,68%,42%)",  # navy blue
+    "Uruguay": "hsl(200,65%,55%)",  # light blue (celeste)
+    "Uzbekistan": "hsl(192,68%,50%)",  # sky blue
 }
 
 # ---------------------------------------------------------------------------

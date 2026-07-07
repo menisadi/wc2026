@@ -86,7 +86,10 @@ def build_timeline(results: pd.DataFrame) -> pd.DataFrame:
                 continue
             rh, ra = current[h], current[a]
             delta = elo_delta(
-                rh, ra, row.home_score, row.away_score,
+                rh,
+                ra,
+                row.home_score,
+                row.away_score,
                 bool(row.neutral) or str(row.tournament) == TOURNAMENT_NAME,
                 str(row.tournament),
             )
