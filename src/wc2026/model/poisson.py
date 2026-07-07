@@ -337,6 +337,55 @@ class PoissonModel:
             winner = team_a if rng.random() < 0.5 else team_b
         return winner, result
 
+    def analytical_scoreline_probs(
+        self, team_a: str, team_b: str, max_goals: int = 10
+    ) -> dict[tuple[int, int], float]:
+        """Exact joint Poisson scoreline distribution for a 90-minute match."""
+        xg_a, xg_b = self.predict_xg(team_a, team_b)
+        result: dict[tuple[int, int], float] = {}
+        for ga in range(max_goals + 1):
+            p_a = float(poisson.pmf(ga, xg_a))
+            for gb in range(max_goals + 1):
+                result[(ga, gb)] = p_a * float(poisson.pmf(gb, xg_b))
+        return result
+
+    def analytical_knockout_scoreline_probs(
+        self,
+        team_a: str,
+        team_b: str,
+        max_goals_reg: int = 10,
+        max_goals_et: int = 5,
+    ) -> dict[tuple[int, int], float]:
+        """Exact 120-minute scoreline distribution for a knockout match.
+
+        Non-draw regulation results are final.  Regulation draws go to ET
+        (Poisson at 30/90 of the regulation rate); ET goals are added to the
+        regulation score.  The final result may still be level — that is the
+        betting score (penalties decide only who advances).
+        """
+        xg_a, xg_b = self.predict_xg(team_a, team_b)
+        xg_et_a = xg_a * _ET_GOALS_FRACTION
+        xg_et_b = xg_b * _ET_GOALS_FRACTION
+
+        result: dict[tuple[int, int], float] = {}
+
+        for i in range(max_goals_reg + 1):
+            p_ia = float(poisson.pmf(i, xg_a))
+            for j in range(max_goals_reg + 1):
+                p_reg = p_ia * float(poisson.pmf(j, xg_b))
+                if i != j:
+                    result[(i, j)] = result.get((i, j), 0.0) + p_reg
+                else:
+                    # Regulation draw → extra time
+                    for et_a in range(max_goals_et + 1):
+                        p_et_a = float(poisson.pmf(et_a, xg_et_a))
+                        for et_b in range(max_goals_et + 1):
+                            p_et_b = float(poisson.pmf(et_b, xg_et_b))
+                            key = (i + et_a, j + et_b)
+                            result[key] = result.get(key, 0.0) + p_reg * p_et_a * p_et_b
+
+        return result
+
     def win_draw_loss_probs(
         self, team_a: str, team_b: str, max_goals: int = 10, home_adv: float = 0.0
     ) -> tuple[float, float, float]:

@@ -136,7 +136,14 @@ def predict_match(
             "73-88 = R32, 89-96 = R16 (official match number, auto-selects --stage)."
         ),
     ),
-    simulations: int = typer.Option(50_000, "--sims", help="Number of simulated matches"),
+    simulations: int = typer.Option(
+        0,
+        "--sims",
+        help=(
+            "Run this many Monte Carlo simulations and append a comparison table. "
+            "0 (default) = analytical only."
+        ),
+    ),
     half_life: float = typer.Option(3.0, "--half-life", help="Recency decay half-life in years"),
     ev: bool = typer.Option(
         False,
@@ -234,32 +241,20 @@ def predict_match(
 
     import numpy as np
 
-    # Knockout bets are scored on the 120-minute result (extra time, no penalties), so
-    # outside the group stage we sample that distribution and derive W/D/L from it.
+    # Knockout bets are scored on the 120-minute result (extra time, no penalties).
     is_knockout = stage != "group"
     xg_a, xg_b = model.predict_xg(ta, tb)
 
-    rng = np.random.default_rng(0)
-    score_counts: dict[tuple[int, int], int] = {}
-    for _ in range(simulations):
-        r = (
-            model.simulate_knockout_scoreline(ta, tb, rng)
-            if is_knockout
-            else model.simulate_match(ta, tb, rng)
-        )
-        k = (r.goals_a, r.goals_b)
-        score_counts[k] = score_counts.get(k, 0) + 1
+    # Analytical scoreline distribution — exact Poisson probabilities, no simulation.
+    score_probs: dict[tuple[int, int], float] = (
+        model.analytical_knockout_scoreline_probs(ta, tb)
+        if is_knockout
+        else model.analytical_scoreline_probs(ta, tb)
+    )
 
-    if is_knockout:
-        wins_a = sum(c for (ga, gb), c in score_counts.items() if ga > gb)
-        draws = sum(c for (ga, gb), c in score_counts.items() if ga == gb)
-        p_a, p_d, p_b = (
-            wins_a / simulations,
-            draws / simulations,
-            (simulations - wins_a - draws) / simulations,
-        )
-    else:
-        p_a, p_d, p_b = model.win_draw_loss_probs(ta, tb)
+    p_a = sum(p for (ga, gb), p in score_probs.items() if ga > gb)
+    p_d = sum(p for (ga, gb), p in score_probs.items() if ga == gb)
+    p_b = sum(p for (ga, gb), p in score_probs.items() if ga < gb)
 
     regulation = " (after 120 min)" if is_knockout else ""
     console.print(f"\n{game_header}[bold]{ta}[/bold] vs [bold]{tb}[/bold]\n")
@@ -281,12 +276,12 @@ def predict_match(
             return p_dir * dir_pts + p_exact * (exact_pts - dir_pts)
 
         ranked = sorted(
-            score_counts.items(),
-            key=lambda kv: score_ev(kv[0][0], kv[0][1], kv[1] / simulations),
+            score_probs.items(),
+            key=lambda kv: score_ev(kv[0][0], kv[0][1], kv[1]),
             reverse=True,
         )[:8]
-        (best_ga, best_gb), best_cnt = ranked[0]
-        best_ev = score_ev(best_ga, best_gb, best_cnt / simulations)
+        (best_ga, best_gb), best_p = ranked[0]
+        best_ev = score_ev(best_ga, best_gb, best_p)
         console.print(
             f"\n[bold green]Best EV bet:[/bold green] {best_ga}–{best_gb} (EV {best_ev:.2f})"
         )
@@ -295,19 +290,44 @@ def predict_match(
         table.add_column("Score", style="bold")
         table.add_column("Probability", justify="right")
         table.add_column("EV", justify="right", style="green")
-        for (ga, gb), cnt in ranked:
-            p_exact = cnt / simulations
+        for (ga, gb), p_exact in ranked:
             table.add_row(f"{ga}–{gb}", f"{p_exact:.1%}", f"{score_ev(ga, gb, p_exact):.2f}")
         console.print(table)
     else:
-        top_scores = sorted(score_counts.items(), key=lambda x: x[1], reverse=True)[:8]
+        top_scores = sorted(score_probs.items(), key=lambda x: x[1], reverse=True)[:8]
 
         table = Table(title="Most likely scorelines", show_header=True)
         table.add_column("Score", style="bold")
         table.add_column("Probability")
-        for (ga, gb), cnt in top_scores:
-            table.add_row(f"{ga}–{gb}", f"{cnt / simulations:.1%}")
+        for (ga, gb), p in top_scores:
+            table.add_row(f"{ga}–{gb}", f"{p:.1%}")
         console.print(table)
+
+    # Optional Monte Carlo comparison
+    if simulations > 0:
+        rng = np.random.default_rng(0)
+        score_counts: dict[tuple[int, int], int] = {}
+        for _ in range(simulations):
+            r = (
+                model.simulate_knockout_scoreline(ta, tb, rng)
+                if is_knockout
+                else model.simulate_match(ta, tb, rng)
+            )
+            k = (r.goals_a, r.goals_b)
+            score_counts[k] = score_counts.get(k, 0) + 1
+
+        top_sim = sorted(score_counts.items(), key=lambda x: x[1], reverse=True)[:8]
+        cmp_table = Table(title=f"Monte Carlo comparison ({simulations:,} sims)", show_header=True)
+        cmp_table.add_column("Score", style="bold")
+        cmp_table.add_column("Analytical", justify="right", style="green")
+        cmp_table.add_column("Simulation", justify="right")
+        for (ga, gb), cnt in top_sim:
+            cmp_table.add_row(
+                f"{ga}–{gb}",
+                f"{score_probs.get((ga, gb), 0.0):.1%}",
+                f"{cnt / simulations:.1%}",
+            )
+        console.print(cmp_table)
 
 
 @app.command("simulate")
