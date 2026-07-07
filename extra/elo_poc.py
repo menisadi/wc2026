@@ -34,14 +34,49 @@ SCHEDULE_NORM: dict[str, str] = {
 BASE_XG = 1.3  # average goals per team in a neutral match
 ELO_SCALE = 600.0  # higher = flatter; at diff=600 xG ratio is e≈2.7×
 
+# Elo update constants (inlined from wc2026.data.elo to keep this standalone).
+HOME_ADVANTAGE = 100.0
+
+
+def k_value(tournament: str) -> int:
+    t = tournament.lower()
+    if "world cup" in t and "qualification" not in t:
+        return 60
+    if "qualification" in t or "qualifying" in t:
+        return 40
+    continental = (
+        "uefa euro",
+        "copa américa",
+        "copa america",
+        "afc asian cup",
+        "african cup of nations",
+        "africa cup of nations",
+        "concacaf gold cup",
+        "concacaf nations league",
+        "uefa nations league",
+        "confederations cup",
+    )
+    if any(c in t for c in continental):
+        return 50
+    if "friendly" in t:
+        return 20
+    return 30
+
+
+def _goal_diff_multiplier(goal_diff: int) -> float:
+    n = abs(int(goal_diff))
+    if n <= 1:
+        return 1.0
+    if n == 2:
+        return 1.5
+    return (11.0 + n) / 8.0
+
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 
 def _apply_live_updates(ratings: dict[str, float]) -> None:
     """Update ratings in-place for every completed match after ELO_SNAPSHOT."""
-    from wc2026.data.elo import HOME_ADVANTAGE, _goal_diff_multiplier, k_value
-
     results_path = DATA_DIR / "results.csv"
     if not results_path.exists():
         return
