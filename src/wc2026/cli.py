@@ -109,6 +109,19 @@ _STAGE_POINTS: dict[str, tuple[int, int]] = {
     "final": (8, 15),
 }
 
+_MATCH_STAGE: dict[int, str] = {
+    **{n: "r32" for n in range(73, 89)},
+    **{n: "r16" for n in range(89, 97)},
+    **{n: "qf" for n in range(97, 101)},
+    **{n: "sf" for n in range(101, 103)},
+    103: "3rd",
+    104: "final",
+}
+
+
+def _stage_for_match(n: int) -> str:
+    return _MATCH_STAGE.get(n, "group")
+
 
 @app.command("predict-match")
 def predict_match(
@@ -120,7 +133,7 @@ def predict_match(
         "-g",
         help=(
             "Match number; fetches both teams. 1-72 = group stage (schedule order); "
-            "73-88 = Round of 32 (official match number, auto-selects --stage r32)."
+            "73-88 = R32, 89-96 = R16 (official match number, auto-selects --stage)."
         ),
     ),
     simulations: int = typer.Option(50_000, "--sims", help="Number of simulated matches"),
@@ -165,19 +178,10 @@ def predict_match(
 
     game_header = ""
     if game is not None and game > 72:
-        # Knockout fixture by official FIFA match number. Round of 32 = 73-88.
-        #
-        # HOW TO ENABLE LATER ROUNDS (R16/QF/SF/final), once they are drawn:
-        #   1. Add their fixtures to data/knockout_bracket.csv with the official match
-        #      numbers (R16 = 89-96, QF = 97-100, SF = 101-102, 3rd = 103, final = 104).
-        #      The simulator override (load_knockout_bracket) uses only rows 73-88, so
-        #      later-round rows are picked up by this --game lookup without affecting it.
-        #      Keep the R32 rows in tree order. (Or pull them with `wc2026 refresh-data`.)
-        #   2. Replace the hard-coded "r32"/"(R32)" below with a match-number → stage
-        #      mapping, e.g. 73-88→r32, 89-96→r16, 97-100→qf, 101-102→sf, 103→"3rd",
-        #      104→final, so --ev scoring and the 120-min model pick the right round.
-        # Until then you can always predict a later-round tie by name:
-        #   wc2026 predict-match TeamA TeamB --stage r16 --ev
+        # Knockout fixture by official FIFA match number.
+        # Match numbers: R32=73-88, R16=89-96, QF=97-100, SF=101-102, 3rd=103, final=104.
+        # Add new rounds to data/knockout_bracket.csv; load_knockout_bracket() filters to
+        # 73-88 so later-round rows only affect this --game lookup, not the simulator.
         fixtures = load_knockout_fixtures()
         if game not in fixtures:
             drawn = sorted(fixtures)
@@ -188,15 +192,16 @@ def predict_match(
             )
             raise typer.Exit(1)
         team_a, team_b = fixtures[game]
+        match_stage = _stage_for_match(game)
         if stage == "group":  # auto-select unless the user set a stage explicitly
-            stage = "r32"
-        game_header = f"Match {game} (R32): "
+            stage = match_stage
+        game_header = f"Match {game} ({match_stage.upper()}): "
     elif game is not None:
         schedule = load_schedule()
         group_games = schedule[schedule["Round"] == "Group stage"].reset_index(drop=True)
         if not 1 <= game <= len(group_games):
             console.print(
-                f"[red]--game must be 1-{len(group_games)} (group stage) or 73-88 (R32).[/red]"
+                f"[red]--game must be 1-{len(group_games)} (group stage) or 73-96 (knockout).[/red]"
             )
             raise typer.Exit(1)
         row = group_games.iloc[game - 1]
@@ -909,7 +914,7 @@ def h2h_pair(
         None,
         "--game",
         "-g",
-        help="WC 2026 match number; overrides TEAM1/TEAM2. 1-72 = group stage, 73-88 = R32.",
+        help="WC 2026 match number; overrides TEAM1/TEAM2. 1-72 = group stage, 73-96 = knockout.",
     ),
     friendlies: bool = typer.Option(
         False, "--friendlies", help="Include friendly matches (weight 0.33)."
@@ -930,12 +935,14 @@ def h2h_pair(
             )
             raise typer.Exit(1)
         t1, t2 = fixtures[game]
-        header = f"Match {game} (R32): {t1} vs {t2}"
+        header = f"Match {game} ({_stage_for_match(game).upper()}): {t1} vs {t2}"
     elif game is not None:
         schedule = load_schedule()
         group_games = schedule[schedule["Round"] == "Group stage"].reset_index(drop=True)
         if not 1 <= game <= len(group_games):
-            console.print(f"[red]--game must be 1-{len(group_games)} (group) or 73-88 (R32).[/red]")
+            console.print(
+                f"[red]--game must be 1-{len(group_games)} (group) or 73-96 (knockout).[/red]"
+            )
             raise typer.Exit(1)
         row = group_games.iloc[game - 1]
         t1, t2 = str(row["home_team"]), str(row["away_team"])

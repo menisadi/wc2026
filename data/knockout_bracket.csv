@@ -5,7 +5,9 @@
 # winners pair up the same way into the quarter-finals, then semis, then final. This
 # ordering is what `pairs_from_winners` relies on, so DO NOT re-sort these rows.
 #
-# `r32_match` is the official FIFA match number (M73–M88), kept only for traceability.
+# `r32_match` is the official FIFA match number (M73–M88 for R32, M89–M96 for R16),
+# kept only for traceability. load_knockout_bracket() filters to 73-88, so R16 rows
+# are only picked up by load_knockout_fixtures() for --game lookup.
 # Names are canonical (must match the names the simulator/results use, e.g. "Cape Verde",
 # "DR Congo", "Bosnia and Herzegovina", "Ivory Coast", "United States").
 #
@@ -30,3 +32,13 @@ r32_match,home,away
 88,Australia,Egypt
 85,Switzerland,Algeria
 87,Colombia,Ghana
+#
+# Round of 16 (M89–M96) — chronological order; does NOT affect the simulator.
+89,Canada,Morocco
+90,Paraguay,France
+91,Brazil,Norway
+92,Mexico,England
+93,Portugal,Spain
+94,United States,Belgium
+95,Argentina,Egypt
+96,Switzerland,Colombia
