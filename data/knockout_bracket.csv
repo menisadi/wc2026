@@ -42,3 +42,9 @@ r32_match,home,away
 94,United States,Belgium
 95,Argentina,Egypt
 96,Switzerland,Colombia
+#
+# Quarter-finals (M97–M100) — chronological order; does NOT affect the simulator.
+97,France,Morocco
+98,Spain,Belgium
+99,Norway,England
+100,Argentina,Switzerland
