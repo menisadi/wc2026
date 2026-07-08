@@ -269,8 +269,6 @@ def main() -> None:
     # Pivot for easy column access
     pivot = history.pivot_table(index="year", columns="country", values="rating")
 
-    years = pivot.index.tolist()
-
     if args.print_top:
         print_top_years(args.country, pivot, as_csv=args.csv)
 

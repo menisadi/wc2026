@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """WC 2026 winner predictor — single-file reference."""
 
+from __future__ import annotations
+
 import argparse
 from collections import Counter, defaultdict
 from dataclasses import dataclass

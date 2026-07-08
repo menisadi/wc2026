@@ -8,6 +8,8 @@ Similar ELO → similar xG → higher draw probability via Poisson variance.
   uv run python elo_poc.py --sims 20000
 """
 
+from __future__ import annotations
+
 import argparse
 from collections import Counter, defaultdict
 from dataclasses import dataclass

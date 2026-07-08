@@ -35,3 +35,6 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"extra/*" = ["E501"]  # exploration scripts with embedded HTML/CSS strings
