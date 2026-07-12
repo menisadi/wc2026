@@ -790,8 +790,24 @@ def betting_backtest(
         "--per-game-refit",
         help="Refit each predictor on all data before each game (slower, more realistic).",
     ),
+    list_predictors: bool = typer.Option(
+        False,
+        "--list-predictors",
+        help="List available predictor names with descriptions, then exit.",
+    ),
 ) -> None:
     """Score predictors with the 3/1/0 betting rule on their modal score predictions."""
+    from wc2026.evaluate.backtest import PREDICTOR_DESCRIPTIONS
+
+    if list_predictors:
+        table = Table(title="Available predictors", show_header=True)
+        table.add_column("Predictor", style="bold")
+        table.add_column("Description")
+        for name, desc in PREDICTOR_DESCRIPTIONS.items():
+            table.add_row(name, desc)
+        console.print(table)
+        return
+
     from wc2026.data.elo import (
         ELO_COMPUTE_MIN_YEAR,
         compute_prematch_elo,

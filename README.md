@@ -55,11 +55,34 @@ wc2026 backtest [--since 2024] [--half-life 3.0] [--baselines uniform,home-win,e
 Walk-forward backtest: train on past data, predict each year, score W/D/L log-loss vs baselines.
 
 ```bash
-wc2026 betting-backtest [--since 2026] [--half-life 3.0] [--predictors ...] [--neutral-only] [--tournaments-only] [--wc-only] [--csv] [--quiet]
+wc2026 betting-backtest [--since 2026] [--half-life 3.0] [--predictors ...] [--neutral-only] [--tournaments-only] [--wc-only] [--csv] [--quiet] [--list-predictors]
 ```
 Score predictors with the 3/1/0 betting rule (3 pts exact score, 1 pt correct outcome, 0 miss) on their modal score predictions.
 - `--predictors` — comma-separated list; default includes 8: `uniform-goals`, `poisson-sample`, `elo-threshold`, `elo-threshold-live`, `poisson+elo`, `dc+elo`, `poisson-outcome-first`, `poisson-best-ev`
 - `--wc-only` — restrict to FIFA World Cup matches for equal N across all predictors
+- `--list-predictors` — print the table below and exit
+
+Available predictors (`uniform` and `home-win` have no modal score, so they're probabilistic-backtest-only):
+
+| Predictor | Description |
+|---|---|
+| `uniform` | Uniform 1/3 win/draw/loss probabilities. No modal score. |
+| `home-win` | Empirical W/D/L frequencies from training data, split by neutral venue. No modal score. |
+| `elo-only` | xG from ELO difference alone via `BASE_XG * exp(±diff/scale)`; modal score is the floor. |
+| `random-poisson` | Single league-wide Poisson λ (training mean goals); predicts `floor(λ), floor(λ)` every match. |
+| `poisson` | Poisson regression with per-team attack/defense effects, no ELO feature. |
+| `poisson+elo` | Poisson regression with per-team attack/defense effects plus an ELO feature. |
+| `dc+elo` | `poisson+elo` with a Dixon-Coles ρ correction on the low-scoring joint outcomes. |
+| `supremacy+totals` | Separate Ridge (goal difference) and Poisson (total goals) regressions, recombined into xG. |
+| `skellam` | Same features as `poisson+elo`, fit by maximizing Skellam (goal-difference) likelihood instead of the independent-Poisson joint likelihood. |
+| `elo-threshold` | Static rule using the fixed pre-tournament ELO snapshot; predicts 2-0/1-0/0-1/0-2 by a 250-point rating-gap threshold. |
+| `elo-threshold-live` | Same threshold rule as `elo-threshold`, but ratings update live after each match. |
+| `elo-double-threshold` | Two-threshold (200/400) ELO margin rule; predicts 1-0/2-0/3-0 by gap, never a draw. |
+| `uniform-goals` | Random baseline: home/away goals sampled independently from Uniform{0..5}. |
+| `poisson-sample` | Random baseline: home/away goals sampled independently from Poisson(1.3). |
+| `poisson-outcome-first` | `poisson+elo`'s xG, but modal score picks the most-likely outcome class first, then its best score within that class. |
+| `poisson-best-ev` | `poisson+elo`'s xG; modal score maximizes `2*P(exact) + P(outcome)` across outcome classes. |
+| `poisson-best-ev-no-elo` | Same rule as `poisson-best-ev` but wraps `poisson` (no ELO) instead of `poisson+elo`. |
 
 ```bash
 wc2026 refresh-data
