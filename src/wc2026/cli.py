@@ -133,8 +133,8 @@ def predict_match(
         "-g",
         help=(
             "Match number; fetches both teams. 1-72 = group stage (schedule order); "
-            "73-88 = R32, 89-96 = R16, 97-100 = QF (official match number, auto-selects "
-            "--stage)."
+            "73-88 = R32, 89-96 = R16, 97-100 = QF, 101-102 = SF (official match number, "
+            "auto-selects --stage)."
         ),
     ),
     simulations: int = typer.Option(
@@ -210,7 +210,7 @@ def predict_match(
         if not 1 <= game <= len(group_games):
             console.print(
                 f"[red]--game must be 1-{len(group_games)} (group stage) "
-                "or 73-100 (knockout).[/red]"
+                "or 73-102 (knockout).[/red]"
             )
             raise typer.Exit(1)
         row = group_games.iloc[game - 1]
@@ -936,7 +936,7 @@ def h2h_pair(
         None,
         "--game",
         "-g",
-        help="WC 2026 match number; overrides TEAM1/TEAM2. 1-72 = group stage, 73-100 = knockout.",
+        help="WC 2026 match number; overrides TEAM1/TEAM2. 1-72 = group stage, 73-102 = knockout.",
     ),
     friendlies: bool = typer.Option(
         False, "--friendlies", help="Include friendly matches (weight 0.33)."
@@ -963,7 +963,7 @@ def h2h_pair(
         group_games = schedule[schedule["Round"] == "Group stage"].reset_index(drop=True)
         if not 1 <= game <= len(group_games):
             console.print(
-                f"[red]--game must be 1-{len(group_games)} (group) or 73-100 (knockout).[/red]"
+                f"[red]--game must be 1-{len(group_games)} (group) or 73-102 (knockout).[/red]"
             )
             raise typer.Exit(1)
         row = group_games.iloc[game - 1]

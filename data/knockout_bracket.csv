@@ -48,3 +48,7 @@ r32_match,home,away
 98,Spain,Belgium
 99,Norway,England
 100,Argentina,Switzerland
+#
+# Semi-finals (M101–M102) — chronological order; does NOT affect the simulator.
+101,France,Spain
+102,England,Argentina

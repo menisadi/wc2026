@@ -31,9 +31,9 @@ def test_simulate_csv_header() -> None:
 
 
 def test_predict_match_rejects_undrawn_knockout_game() -> None:
-    # Match 101 (a later round, SF) is not drawn yet -> clean error before training.
+    # Match 103 (a later round, 3rd place) is not drawn yet -> clean error before training.
     runner = CliRunner()
-    result = runner.invoke(app, ["predict-match", "--game", "101"])
+    result = runner.invoke(app, ["predict-match", "--game", "103"])
     assert result.exit_code == 1
     assert "not a drawn knockout fixture" in result.output
 
