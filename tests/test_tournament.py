@@ -76,7 +76,8 @@ def test_load_knockout_bracket_shape() -> None:
 
 def test_load_knockout_fixtures_match_numbers() -> None:
     fixtures = load_knockout_fixtures()
-    assert set(fixtures) == set(range(73, 89))  # official R32 match numbers
+    # R32 (73-88) must always be present; later rounds are added as they're drawn.
+    assert set(range(73, 89)) <= set(fixtures)
     assert fixtures[86] == ("Argentina", "Cape Verde")  # canonical names, from the bracket
 
 
