@@ -11,6 +11,7 @@ from wc2026.evaluate.backtest import (
     EloOnlyPredictor,
     EloThresholdWalkPredictor,
     HomeWinPredictor,
+    LoserMarginPredictor,
     PoissonPredictor,
     RandomPoissonPredictor,
     UniformGoalsPredictor,
@@ -512,6 +513,57 @@ def test_poisson_walk_forward_leak_free_feature_path() -> None:
     # The leak-free per-match feature was wired through and used at fit time.
     assert p._elo_by_match is elo_by_match
     assert p._model is not None and p._model._has_elo_feature is True
+
+
+# ---------------------------------------------------------------------------
+# LoserMarginPredictor
+# ---------------------------------------------------------------------------
+
+
+def test_loser_margin_is_sequential() -> None:
+    assert LoserMarginPredictor.is_sequential is True
+
+
+def test_loser_margin_ev_favors_nonzero_margin_when_win_prob_dominates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # margin_lambda = 0.2 → naive floor would pick margin=0 (a draw), but a
+    # dominant home-win probability should tip the EV in favor of margin=1.
+    monkeypatch.setattr(
+        PoissonPredictor, "predict_xg", lambda self, matches: np.array([[1.6, 1.4]])
+    )
+    monkeypatch.setattr(
+        PoissonPredictor, "predict_proba", lambda self, matches: np.array([[0.9, 0.05, 0.05]])
+    )
+    h, a = LoserMarginPredictor().predict_modal_score(_match_df(1))[0]
+    assert (h, a) == (2, 1)
+
+
+def test_loser_margin_ev_favors_draw_when_draw_prob_dominates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same xG gap as above, but now the draw probability dominates.
+    monkeypatch.setattr(
+        PoissonPredictor, "predict_xg", lambda self, matches: np.array([[1.6, 1.4]])
+    )
+    monkeypatch.setattr(
+        PoissonPredictor, "predict_proba", lambda self, matches: np.array([[0.05, 0.9, 0.05]])
+    )
+    h, a = LoserMarginPredictor().predict_modal_score(_match_df(1))[0]
+    assert (h, a) == (1, 1)
+
+
+def test_loser_margin_away_favored_assigns_margin_to_away(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        PoissonPredictor, "predict_xg", lambda self, matches: np.array([[1.4, 1.6]])
+    )
+    monkeypatch.setattr(
+        PoissonPredictor, "predict_proba", lambda self, matches: np.array([[0.05, 0.05, 0.9]])
+    )
+    h, a = LoserMarginPredictor().predict_modal_score(_match_df(1))[0]
+    assert (h, a) == (1, 2)
 
 
 # ---------------------------------------------------------------------------

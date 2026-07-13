@@ -83,6 +83,7 @@ Available predictors (`uniform` and `home-win` have no modal score, so they're p
 | `poisson-outcome-first` | `poisson+elo`'s xG, but modal score picks the most-likely outcome class first, then its best score within that class. |
 | `poisson-best-ev` | `poisson+elo`'s xG; modal score maximizes `2*P(exact) + P(outcome)` across outcome classes. |
 | `poisson-best-ev-no-elo` | Same rule as `poisson-best-ev` but wraps `poisson` (no ELO) instead of `poisson+elo`. |
+| `poisson-loser-margin` | `poisson+elo`'s xG, decomposed into loser's goals ~ Poisson(min(xg_h, xg_a)) (kept at its mode) and the winner-loser margin ~ Poisson(\|xg_h - xg_a\|); the margin (0 = draw, m >= 1 = favorite wins by m) is chosen by `EV = 2*P(exact) + P(outcome)`, not its raw mode. |
 
 ```bash
 wc2026 refresh-data

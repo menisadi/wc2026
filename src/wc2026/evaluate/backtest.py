@@ -1555,6 +1555,85 @@ class BestEvPredictor:
         self._base.update(match_row)
 
 
+class LoserMarginPredictor:
+    """Decompose the score into loser's goals and the winner-loser margin,
+    picking each by expected betting value rather than raw probability.
+
+    Given (xg_h, xg_a) from PoissonPredictor(use_elo=True): the lower-xG side is
+    the "loser", whose goals ~ Poisson(min(xg_h, xg_a)) — kept at its mode, since
+    it doesn't affect the outcome-class tradeoff below. The margin (0 = draw,
+    m >= 1 = favorite wins by m) is modeled as its own Poisson(|xg_h - xg_a|),
+    but instead of taking its mode directly, each candidate margin is scored by
+    EV = 2 * P(loser's modal goals) * P(margin) + P(outcome class) — the same
+    "2*P(exact) + P(outcome)" rule BestEvPredictor uses — where P(outcome class)
+    comes from the base model's actual win/draw/loss probabilities. The margin
+    with the highest EV wins, so a likely draw can beat a barely-more-likely
+    1-goal margin instead of the margin's own mode being taken blindly.
+    """
+
+    name = "poisson-loser-margin"
+    is_sequential: bool = True
+
+    def __init__(self) -> None:
+        self._base = PoissonPredictor(use_elo=True)
+
+    def fit(
+        self,
+        training: pd.DataFrame,
+        elo_history: pd.DataFrame | None,
+        half_life: float,
+        year_cutoff: int,
+    ) -> None:
+        self._base.fit(training, elo_history, half_life, year_cutoff)
+
+    def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
+        return self._base.predict_proba(matches)
+
+    def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return self._base.predict_xg(matches)
+
+    def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
+        return self._base.predict_score_ll(matches)
+
+    def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
+        xgs = self._base.predict_xg(matches)
+        probas = self._base.predict_proba(matches)
+        margins = np.arange(DC_MAX_GOALS + 1)
+        scores = []
+        for i in range(len(matches)):
+            xg_h, xg_a = float(xgs[i, 0]), float(xgs[i, 1])
+            home_favored = xg_h >= xg_a
+            loser_lambda = min(xg_h, xg_a)
+            margin_lambda = abs(xg_h - xg_a)
+
+            loser_goals = int(np.floor(loser_lambda))
+            p_loser_mode = float(scipy_poisson.pmf(loser_goals, loser_lambda))
+            p_margin = scipy_poisson.pmf(margins, margin_lambda)
+            p_draw = float(probas[i, 1])
+            p_fav_win = float(probas[i, 0] if home_favored else probas[i, 2])
+
+            best_ev = -1.0
+            best_margin = 0
+            for m in range(DC_MAX_GOALS + 1):
+                p_outcome = p_draw if m == 0 else p_fav_win
+                ev = 2.0 * p_loser_mode * float(p_margin[m]) + p_outcome
+                if ev > best_ev:
+                    best_ev = ev
+                    best_margin = m
+
+            if home_favored:
+                scores.append((loser_goals + best_margin, loser_goals))
+            else:
+                scores.append((loser_goals, loser_goals + best_margin))
+        return np.array(scores, dtype=int)
+
+    def set_elo_by_match(self, elo_by_match: pd.DataFrame | None) -> None:
+        self._base.set_elo_by_match(elo_by_match)
+
+    def update(self, match_row: pd.Series) -> None:
+        self._base.update(match_row)
+
+
 PREDICTOR_DESCRIPTIONS: dict[str, str] = {
     "uniform": (
         "Uniform 1/3 win/draw/loss probabilities. No modal score — probabilistic backtest only."
@@ -1603,6 +1682,11 @@ PREDICTOR_DESCRIPTIONS: dict[str, str] = {
     "poisson-best-ev-no-elo": (
         "Same rule as poisson-best-ev but wraps poisson (no ELO) instead of poisson+elo."
     ),
+    "poisson-loser-margin": (
+        "poisson+elo's xG, decomposed into loser's goals ~ Poisson(min(xg_h, xg_a)) (kept at its"
+        " mode) and the winner-loser margin ~ Poisson(|xg_h - xg_a|); the margin (0 = draw, m >= 1"
+        " = favorite wins by m) is chosen by EV = 2*P(exact) + P(outcome), not its raw mode."
+    ),
 }
 
 
@@ -1626,6 +1710,7 @@ def build_predictors(names: list[str]) -> list[Predictor]:
         "poisson-outcome-first": OutcomeFirstPredictor(),
         "poisson-best-ev": BestEvPredictor(use_elo=True),
         "poisson-best-ev-no-elo": BestEvPredictor(use_elo=False),
+        "poisson-loser-margin": LoserMarginPredictor(),
     }
     out: list[Predictor] = []
     for n in names:
