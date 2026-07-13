@@ -17,6 +17,7 @@ from wc2026.evaluate.backtest import (
     UniformGoalsPredictor,
     UniformPredictor,
     _dc_tau_vec,
+    _loser_margin_ev,
     _modal_in_class,
     _wdl_from_xg,
     build_predictors,
@@ -516,6 +517,26 @@ def test_poisson_walk_forward_leak_free_feature_path() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _loser_margin_ev
+# ---------------------------------------------------------------------------
+
+
+def test_loser_margin_ev_loser_goals_is_mode() -> None:
+    loser_goals, _ = _loser_margin_ev(1.4, 1.2, p_draw=0.3, p_fav_win=0.3)
+    assert loser_goals == int(np.floor(1.4))
+
+
+def test_loser_margin_ev_picks_zero_margin_when_draw_dominates() -> None:
+    _, margin = _loser_margin_ev(1.4, 0.2, p_draw=0.9, p_fav_win=0.05)
+    assert margin == 0
+
+
+def test_loser_margin_ev_picks_nonzero_margin_when_win_prob_dominates() -> None:
+    _, margin = _loser_margin_ev(1.4, 0.2, p_draw=0.05, p_fav_win=0.9)
+    assert margin >= 1
+
+
+# ---------------------------------------------------------------------------
 # LoserMarginPredictor
 # ---------------------------------------------------------------------------
 
@@ -524,46 +545,26 @@ def test_loser_margin_is_sequential() -> None:
     assert LoserMarginPredictor.is_sequential is True
 
 
-def test_loser_margin_ev_favors_nonzero_margin_when_win_prob_dominates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # margin_lambda = 0.2 → naive floor would pick margin=0 (a draw), but a
-    # dominant home-win probability should tip the EV in favor of margin=1.
-    monkeypatch.setattr(
-        PoissonPredictor, "predict_xg", lambda self, matches: np.array([[1.6, 1.4]])
-    )
-    monkeypatch.setattr(
-        PoissonPredictor, "predict_proba", lambda self, matches: np.array([[0.9, 0.05, 0.05]])
-    )
-    h, a = LoserMarginPredictor().predict_modal_score(_match_df(1))[0]
-    assert (h, a) == (2, 1)
+def test_loser_margin_features_shape_and_values() -> None:
+    p = LoserMarginPredictor()
+    p._ratings = {"A": 1700.0, "B": 1300.0}
+    p._rating_mu, p._rating_sd = 1500.0, 200.0
+    matches = pd.DataFrame({"home_team": ["A"], "away_team": ["B"], "neutral": [False]})
+    X = p._features(matches)
+    assert X.shape == (1, 3)
+    np.testing.assert_allclose(X[0], [2.0, 0.0, 1.0], atol=1e-6)
 
 
-def test_loser_margin_ev_favors_draw_when_draw_prob_dominates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Same xG gap as above, but now the draw probability dominates.
-    monkeypatch.setattr(
-        PoissonPredictor, "predict_xg", lambda self, matches: np.array([[1.6, 1.4]])
-    )
-    monkeypatch.setattr(
-        PoissonPredictor, "predict_proba", lambda self, matches: np.array([[0.05, 0.9, 0.05]])
-    )
-    h, a = LoserMarginPredictor().predict_modal_score(_match_df(1))[0]
-    assert (h, a) == (1, 1)
+def test_loser_margin_walk_forward_end_to_end() -> None:
+    results, elo_hist = _poisson_training_data()
+    extra = results.copy()
+    extra["date"] = extra["date"] + pd.offsets.DateOffset(years=3)
+    full = pd.concat([results, extra], ignore_index=True)
 
-
-def test_loser_margin_away_favored_assigns_margin_to_away(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        PoissonPredictor, "predict_xg", lambda self, matches: np.array([[1.4, 1.6]])
-    )
-    monkeypatch.setattr(
-        PoissonPredictor, "predict_proba", lambda self, matches: np.array([[0.05, 0.05, 0.9]])
-    )
-    h, a = LoserMarginPredictor().predict_modal_score(_match_df(1))[0]
-    assert (h, a) == (1, 2)
+    res = walk_forward(full, elo_hist, [LoserMarginPredictor()], since_year=2021)
+    assert not res.predictions.empty
+    modal = res.predictions[["modal_h", "modal_a"]].to_numpy()
+    assert (modal >= 0).all()
 
 
 # ---------------------------------------------------------------------------

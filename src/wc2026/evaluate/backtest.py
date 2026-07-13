@@ -1555,18 +1555,57 @@ class BestEvPredictor:
         self._base.update(match_row)
 
 
+def _loser_margin_ev(
+    loser_lambda: float,
+    margin_lambda: float,
+    p_draw: float,
+    p_fav_win: float,
+    max_goals: int = DC_MAX_GOALS,
+) -> tuple[int, int]:
+    """Pick (loser_goals, margin) maximizing EV = 2*P(exact) + P(outcome class).
+
+    loser_goals is fixed at the loser Poisson's mode — the outcome-class term
+    doesn't depend on it, so it never changes the argmax. margin is chosen
+    among 0..max_goals, trading its own Poisson mass against the base model's
+    real outcome-class probability (0 = draw, >=1 = favorite wins by margin).
+    """
+    loser_goals = int(np.floor(loser_lambda))
+    p_loser_mode = float(scipy_poisson.pmf(loser_goals, loser_lambda))
+    margins = np.arange(max_goals + 1)
+    p_margin = scipy_poisson.pmf(margins, margin_lambda)
+
+    best_ev = -1.0
+    best_margin = 0
+    for m in range(max_goals + 1):
+        p_outcome = p_draw if m == 0 else p_fav_win
+        ev = 2.0 * p_loser_mode * float(p_margin[m]) + p_outcome
+        if ev > best_ev:
+            best_ev = ev
+            best_margin = m
+    return loser_goals, best_margin
+
+
 class LoserMarginPredictor:
     """Decompose the score into loser's goals and the winner-loser margin,
     picking each by expected betting value rather than raw probability.
 
-    Given (xg_h, xg_a) from PoissonPredictor(use_elo=True): the lower-xG side is
-    the "loser", whose goals ~ Poisson(min(xg_h, xg_a)) — kept at its mode, since
-    it doesn't affect the outcome-class tradeoff below. The margin (0 = draw,
-    m >= 1 = favorite wins by m) is modeled as its own Poisson(|xg_h - xg_a|),
-    but instead of taking its mode directly, each candidate margin is scored by
+    loser_goals and margin are each fit as their own PoissonRegressor targets
+    (loser_goals = min(home, away), margin = |home - away|; features: |elo
+    z-gap|, mean elo z, neutral flag — same featurization as
+    SupremacyTotalsPredictor's totals regression) — rather than being derived
+    arithmetically from poisson+elo's per-team xG, which is fit to predict each
+    team's own goals, not the eventual loser's goals or the margin. Fitting
+    them directly targets what actually looked well-fit by Poisson in practice
+    (see extra/poisson_close_elo_sf_final.py) and clearly outperforms the
+    arithmetic derivation in backtests.
+
+    Given loser_lambda and margin_lambda: the loser's goals are kept at the
+    loser Poisson's mode (it doesn't affect the outcome-class tradeoff below).
+    The margin (0 = draw, m >= 1 = favorite wins by m) is chosen by
     EV = 2 * P(loser's modal goals) * P(margin) + P(outcome class) — the same
-    "2*P(exact) + P(outcome)" rule BestEvPredictor uses — where P(outcome class)
-    comes from the base model's actual win/draw/loss probabilities. The margin
+    "2*P(exact) + P(outcome)" rule BestEvPredictor uses — where P(outcome
+    class) comes from the base poisson+elo model's actual win/draw/loss
+    probabilities (also used to decide which side is favorite). The margin
     with the highest EV wins, so a likely draw can beat a barely-more-likely
     1-goal margin instead of the margin's own mode being taken blindly.
     """
@@ -1575,7 +1614,32 @@ class LoserMarginPredictor:
     is_sequential: bool = True
 
     def __init__(self) -> None:
+        from sklearn.linear_model import PoissonRegressor
+
         self._base = PoissonPredictor(use_elo=True)
+        self._loser_reg = PoissonRegressor(alpha=0.01, max_iter=200)
+        self._margin_reg = PoissonRegressor(alpha=0.01, max_iter=200)
+        self._ratings: dict[str, float] = {}
+        self._rating_mu: float = 1500.0
+        self._rating_sd: float = 200.0
+        self._rating_fallback: float = 1500.0
+
+    def _z(self, team: str) -> float:
+        return (self._ratings.get(team, self._rating_fallback) - self._rating_mu) / self._rating_sd
+
+    def _features(self, matches: pd.DataFrame) -> np.ndarray:
+        n = len(matches)
+        X = np.zeros((n, 3), dtype=np.float32)
+        home_teams = matches["home_team"].tolist()
+        away_teams = matches["away_team"].tolist()
+        neutrals = matches["neutral"].to_numpy()
+        for i in range(n):
+            hz = self._z(home_teams[i])
+            az = self._z(away_teams[i])
+            X[i, 0] = abs(hz - az)
+            X[i, 1] = (hz + az) / 2.0
+            X[i, 2] = 0.0 if neutrals[i] else 1.0
+        return X
 
     def fit(
         self,
@@ -1585,6 +1649,31 @@ class LoserMarginPredictor:
         year_cutoff: int,
     ) -> None:
         self._base.fit(training, elo_history, half_life, year_cutoff)
+
+        df = training.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
+        if df.empty:
+            return
+
+        if elo_history is not None and not elo_history.empty:
+            past = elo_history[elo_history["year"] < year_cutoff]
+            latest = past.sort_values("year").drop_duplicates("country", keep="last")
+            self._ratings = {str(c): float(r) for c, r in zip(latest["country"], latest["rating"])}
+        rating_vals = np.array(list(self._ratings.values()) or [1500.0])
+        self._rating_mu = float(rating_vals.mean())
+        self._rating_sd = float(rating_vals.std()) or 1.0
+        self._rating_fallback = float(np.median(rating_vals))
+
+        X = self._features(df)
+        age = (df["date"].max() - df["date"]).dt.days.to_numpy().astype(float)
+        w = np.exp(-np.log(2.0) * age / (half_life * 365.25))
+
+        home_scores = df["home_score"].to_numpy()
+        away_scores = df["away_score"].to_numpy()
+        y_loser = np.minimum(home_scores, away_scores).astype(float)
+        y_margin = np.abs(home_scores - away_scores).astype(float)
+
+        _ = self._loser_reg.fit(X, y_loser, sample_weight=w)
+        _ = self._margin_reg.fit(X, y_margin, sample_weight=w)
 
     def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
         return self._base.predict_proba(matches)
@@ -1598,29 +1687,20 @@ class LoserMarginPredictor:
     def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
         xgs = self._base.predict_xg(matches)
         probas = self._base.predict_proba(matches)
-        margins = np.arange(DC_MAX_GOALS + 1)
+        X = self._features(matches)
+        loser_lambdas = np.clip(self._loser_reg.predict(X), 0.05, None)
+        margin_lambdas = np.clip(self._margin_reg.predict(X), 0.05, None)
+
         scores = []
         for i in range(len(matches)):
             xg_h, xg_a = float(xgs[i, 0]), float(xgs[i, 1])
             home_favored = xg_h >= xg_a
-            loser_lambda = min(xg_h, xg_a)
-            margin_lambda = abs(xg_h - xg_a)
-
-            loser_goals = int(np.floor(loser_lambda))
-            p_loser_mode = float(scipy_poisson.pmf(loser_goals, loser_lambda))
-            p_margin = scipy_poisson.pmf(margins, margin_lambda)
             p_draw = float(probas[i, 1])
             p_fav_win = float(probas[i, 0] if home_favored else probas[i, 2])
 
-            best_ev = -1.0
-            best_margin = 0
-            for m in range(DC_MAX_GOALS + 1):
-                p_outcome = p_draw if m == 0 else p_fav_win
-                ev = 2.0 * p_loser_mode * float(p_margin[m]) + p_outcome
-                if ev > best_ev:
-                    best_ev = ev
-                    best_margin = m
-
+            loser_goals, best_margin = _loser_margin_ev(
+                float(loser_lambdas[i]), float(margin_lambdas[i]), p_draw, p_fav_win
+            )
             if home_favored:
                 scores.append((loser_goals + best_margin, loser_goals))
             else:
@@ -1683,9 +1763,9 @@ PREDICTOR_DESCRIPTIONS: dict[str, str] = {
         "Same rule as poisson-best-ev but wraps poisson (no ELO) instead of poisson+elo."
     ),
     "poisson-loser-margin": (
-        "poisson+elo's xG, decomposed into loser's goals ~ Poisson(min(xg_h, xg_a)) (kept at its"
-        " mode) and the winner-loser margin ~ Poisson(|xg_h - xg_a|); the margin (0 = draw, m >= 1"
-        " = favorite wins by m) is chosen by EV = 2*P(exact) + P(outcome), not its raw mode."
+        "Loser's goals and the winner-loser margin each fit directly as PoissonRegressor targets"
+        " (elo z-gap, mean elo z, neutral); margin (0 = draw, m >= 1 = favorite wins by m) is"
+        " chosen by EV = 2*P(exact) + P(outcome) using poisson+elo's outcome probabilities."
     ),
 }
 
