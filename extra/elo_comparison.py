@@ -219,6 +219,16 @@ def main() -> None:
         help="Second country to overlay on the plot (default: none)",
     )
     parser.add_argument(
+        "--country-color",
+        default="#0038b8",
+        help="Line color for the primary country (default: #0038b8)",
+    )
+    parser.add_argument(
+        "--compared-color",
+        default="#009c3b",
+        help="Line color for the comparison country (default: #009c3b)",
+    )
+    parser.add_argument(
         "--global-median",
         action="store_true",
         default=False,
@@ -370,7 +380,7 @@ def main() -> None:
         ax.plot(
             bx.index,
             smooth(bx).values,
-            color="#009c3b",
+            color=args.compared_color,
             linewidth=2.0,
             label=args.compare,
             zorder=3,
@@ -381,7 +391,7 @@ def main() -> None:
     ax.plot(
         cx.index,
         smooth(cx).values,
-        color="#0038b8",
+        color=args.country_color,
         linewidth=2.5,
         label=args.country,
         zorder=5,
