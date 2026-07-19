@@ -1180,6 +1180,9 @@ def snapshot(
         existing_dates = set(pd.read_csv(history_path)["date"].unique())
 
     draw_winners = load_knockout_draw_winners()
+    # Fix the knockout draw to the real bracket (not the simulated approximation)
+    # for both backfilled days and today's snapshot.
+    r32 = load_knockout_bracket()
 
     # --- backfill missing past match days ---
     if not no_backfill:
@@ -1224,6 +1227,7 @@ def snapshot(
                             n=simulations,
                             seed=seed,
                             actual_results=actual,
+                            r32_override=r32,
                             draw_winners=draw_winners,
                         )
 
@@ -1250,8 +1254,6 @@ def snapshot(
     if not backfill_only:
         model, groups, _ = _load_and_train(quiet=quiet, half_life=half_life)
         actual = load_wc2026_results()
-        # Once the group stage is over, fix the knockout draw to the real bracket.
-        r32 = load_knockout_bracket()
 
         with _status(f"Running {simulations:,} simulations…", quiet):
             sim = run_monte_carlo(
