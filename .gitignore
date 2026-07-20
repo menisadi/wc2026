@@ -21,3 +21,4 @@ data/my_bets.csv
 # but keep the model documentation pages
 !docs/*.html
 /.vibemark.json
+**/.DS_Store
