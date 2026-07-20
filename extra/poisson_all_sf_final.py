@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from poisson_close_elo_sf_final import TOURNAMENTS, last_n_stages, resolve_winner_loser
 from scipy import stats
 
-from poisson_close_elo_sf_final import TOURNAMENTS, last_n_stages, resolve_winner_loser
 from wc2026.data.loader import load_results
 
 
