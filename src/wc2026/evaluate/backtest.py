@@ -848,6 +848,7 @@ def walk_forward(
     progress: Callable[[str], None] | None = None,
     elo_by_match: pd.DataFrame | None = None,
     per_game_refit: bool = False,
+    on_game_progress: Callable[[str, int, int], None] | None = None,
 ) -> BacktestResult:
     """Yearly walk-forward over `since_year..max(year)`.
 
@@ -865,6 +866,13 @@ def walk_forward(
     `elo_by_match` (optional) is a full-history per-match pre-match ELO table
     (see compute_prematch_elo); when given it is handed to any predictor exposing
     set_elo_by_match, replacing the leaky year-end training feature.
+
+    `on_game_progress` (optional), called as `on_game_progress(label, completed, total)`
+    after each game finishes under per_game_refit -- `label` identifies which
+    (predictor, year) is progressing, since per_game_refit can be slow enough (a full
+    refit per game) that a caller may want to render a live progress bar rather than
+    wait silently. No-op when per_game_refit is False -- the non-refit path predicts
+    a whole year in one batch call, not game by game.
     """
     df = results.dropna(subset=["home_score", "away_score"]).copy()
     df["year"] = df["date"].dt.year
@@ -917,6 +925,7 @@ def walk_forward(
                     progress(f"{p.name}: per-game refit, {y} ({len(test)} matches)")
                 update_fn = getattr(p, "update", None)
                 test_sorted = test.sort_values("date").reset_index(drop=True)
+                n_games = len(test_sorted)
                 for i, (_, m) in enumerate(test_sorted.iterrows()):
                     game_train = df[df["date"] < m["date"]].drop(columns="year")
                     if game_train.empty:
@@ -969,6 +978,8 @@ def walk_forward(
                             else -1,
                         }
                     )
+                    if on_game_progress is not None:
+                        on_game_progress(f"{p.name} ({y})", i + 1, n_games)
                 continue
 
             if progress is not None:

@@ -782,6 +782,11 @@ def betting_backtest(
         "--per-game-refit",
         help="Refit each predictor on all data before each game (slower, more realistic).",
     ),
+    show_progress: bool = typer.Option(
+        False,
+        "--progress",
+        help="Live per-game progress bar with ETA during --per-game-refit (no effect otherwise).",
+    ),
     list_predictors: bool = typer.Option(
         False,
         "--list-predictors",
@@ -822,18 +827,53 @@ def betting_backtest(
         if not quiet:
             err_console.log(msg)
 
-    bt = walk_forward(
-        results=results,
-        elo_history=elo_history,
-        predictors=preds,
-        since_year=since,
-        half_life=half_life,
-        neutral_only=neutral_only,
-        tournaments_only=tournaments_only,
-        progress=progress,
-        elo_by_match=elo_by_match,
-        per_game_refit=per_game_refit,
-    )
+    on_game_progress = None
+    rich_progress = None
+    if show_progress and per_game_refit and not quiet:
+        from rich.progress import (
+            BarColumn,
+            Progress,
+            TaskID,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
+
+        rich_progress = Progress(
+            TextColumn("[bold]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            TextColumn("ETA"),
+            TimeRemainingColumn(),
+            console=err_console,
+        )
+        task_ids: dict[str, TaskID] = {}
+
+        def on_game_progress(label: str, completed: int, total: int) -> None:
+            if label not in task_ids:
+                task_ids[label] = rich_progress.add_task(label, total=total)
+            rich_progress.update(task_ids[label], completed=completed)
+
+    try:
+        if rich_progress is not None:
+            rich_progress.start()
+        bt = walk_forward(
+            results=results,
+            elo_history=elo_history,
+            predictors=preds,
+            since_year=since,
+            half_life=half_life,
+            neutral_only=neutral_only,
+            tournaments_only=tournaments_only,
+            progress=progress,
+            elo_by_match=elo_by_match,
+            per_game_refit=per_game_refit,
+            on_game_progress=on_game_progress,
+        )
+    finally:
+        if rich_progress is not None:
+            rich_progress.stop()
 
     score_rows: list[tuple[str, int, int, int, int, int]] = []
     for name in bt.predictor_names:
