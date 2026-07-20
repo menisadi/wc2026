@@ -340,10 +340,10 @@ class PoissonModel:
         return winner, result
 
     def analytical_scoreline_probs(
-        self, team_a: str, team_b: str, max_goals: int = 10
+        self, team_a: str, team_b: str, max_goals: int = 10, home_adv: float = 0.0
     ) -> dict[tuple[int, int], float]:
         """Exact joint Poisson scoreline distribution for a 90-minute match."""
-        xg_a, xg_b = self.predict_xg(team_a, team_b)
+        xg_a, xg_b = self.predict_xg(team_a, team_b, home_adv=home_adv)
         result: dict[tuple[int, int], float] = {}
         for ga in range(max_goals + 1):
             p_a = float(poisson.pmf(ga, xg_a))
@@ -357,6 +357,7 @@ class PoissonModel:
         team_b: str,
         max_goals_reg: int = 10,
         max_goals_et: int = 5,
+        home_adv: float = 0.0,
     ) -> dict[tuple[int, int], float]:
         """Exact 120-minute scoreline distribution for a knockout match.
 
@@ -365,7 +366,7 @@ class PoissonModel:
         regulation score.  The final result may still be level — that is the
         betting score (penalties decide only who advances).
         """
-        xg_a, xg_b = self.predict_xg(team_a, team_b)
+        xg_a, xg_b = self.predict_xg(team_a, team_b, home_adv=home_adv)
         xg_et_a = xg_a * _ET_GOALS_FRACTION
         xg_et_b = xg_b * _ET_GOALS_FRACTION
 

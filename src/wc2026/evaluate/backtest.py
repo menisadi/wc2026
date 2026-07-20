@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 from scipy.stats import poisson as scipy_poisson
 
-from wc2026.data.elo import compute_elo_history, compute_prematch_elo
 from wc2026.evaluate.metrics import KNOCKOUT_STAGES, STAGE_POINTS
 from wc2026.features.builder import MAJOR_TOURNAMENTS, TeamStrength
 from wc2026.model.poisson import PoissonModel
@@ -267,6 +266,25 @@ class RandomPoissonPredictor:
         return np.full((len(matches), 2), modal, dtype=int)
 
 
+def _fresh_elo_as_of(cutoff: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Recompute (elo_history, elo_by_match) from full ELO-depth history through `cutoff`.
+
+    `cutoff` is inclusive: every row in the reloaded set has `date <= cutoff`. Used
+    wherever a per-game prediction needs day-accurate ELO instead of a year-granular
+    table computed once for a whole eval year — see PoissonPredictor.fit and
+    ReplayBestEvPredictor.fit. Reloads from disk rather than reusing whatever
+    `training`/`elo_history` the caller already has, because those are only as deep
+    as the caller's own min_year (e.g. betting-backtest's default min_year=2000),
+    shallower than ELO_COMPUTE_MIN_YEAR (1980).
+    """
+    from wc2026.data.elo import ELO_COMPUTE_MIN_YEAR, compute_elo_history, compute_prematch_elo
+    from wc2026.data.loader import load_results
+
+    elo_source = load_results(min_year=ELO_COMPUTE_MIN_YEAR)
+    elo_source = elo_source[elo_source["date"] <= cutoff]
+    return compute_elo_history(elo_source), compute_prematch_elo(elo_source)
+
+
 class PoissonPredictor:
     """Wraps PoissonModel. `use_elo` toggles the ELO feature inside the regression.
 
@@ -296,17 +314,27 @@ class PoissonPredictor:
         half_life: float,
         year_cutoff: int,
     ) -> None:
-        # TODO: `year_cutoff` truncates elo_history to full calendar years, so
-        # strengths[team].elo (used at predict time via _elo_z) is frozen at the
-        # eval year's start even under walk_forward(per_game_refit=True), which
-        # passes a day-accurate `training` set but still calls fit() with the same
-        # year_cutoff every time. Confirmed empirically: 2026 WC backtest picks
-        # don't change at all between per_game_refit on/off. A real fix means
-        # recomputing elo_history from `training` itself (same approach
-        # cli.py::_load_and_train uses for --cutoff-date) when per_game_refit is
-        # active, so ratings reflect the exact day, not just the year.
+        # Under walk_forward(per_game_refit=True), `training` is date-accurate
+        # (date < the specific game) and can include matches from year_cutoff itself
+        # -- but elo_history/self._elo_by_match are year-granular tables computed
+        # once for the whole eval year. Truncating them by `year < year_cutoff` as
+        # usual would leave ELO frozen at the eval year's start for every game in
+        # it; truncating by `year <= year_cutoff` instead would leak, since the
+        # year_cutoff bucket in the pre-computed elo_history reflects every match
+        # currently in results.csv for that year, including ones after (or even)
+        # the game being predicted. Detect this case from `training` itself and
+        # recompute ELO fresh, cut off at the exact day, instead. In the normal
+        # (non-refit) case training's max date is always in year_cutoff - 1, so this
+        # never triggers there -- no behavior or performance change for the default,
+        # fast (fit-once-per-year) path the rest of this module relies on.
+        day_accurate = not training.empty and int(training["date"].dt.year.max()) >= year_cutoff
+        if day_accurate:
+            elo_history, elo_by_match_full = _fresh_elo_as_of(training["date"].max())
+        else:
+            elo_by_match_full = self._elo_by_match
+
         if elo_history is not None and not elo_history.empty:
-            past = elo_history[elo_history["year"] < year_cutoff]
+            past = elo_history if day_accurate else elo_history[elo_history["year"] < year_cutoff]
             latest = past.sort_values("year").drop_duplicates("country", keep="last")
             strengths = {
                 str(row.country): TeamStrength(
@@ -319,17 +347,18 @@ class PoissonPredictor:
             }
             if strengths:
                 self._fallback_elo = float(np.median([s.elo for s in strengths.values()]))
-            elo_feature = elo_history[elo_history["year"] < year_cutoff] if self.use_elo else None
+            elo_feature = past if self.use_elo else None
         else:
             strengths = {}
             elo_feature = None
 
         # Leak-free path: restrict the pre-match table to matches strictly before the
-        # eval year so the training feature never sees within-eval-year results.
+        # eval year (or, if day_accurate, the exact game date) so the training
+        # feature never sees within-eval-year (or within-game-day) results.
         elo_by_match = None
-        if self.use_elo and self._elo_by_match is not None:
-            tbl = self._elo_by_match
-            elo_by_match = tbl[tbl["date"].dt.year < year_cutoff]
+        if self.use_elo and elo_by_match_full is not None:
+            tbl = elo_by_match_full
+            elo_by_match = tbl if day_accurate else tbl[tbl["date"].dt.year < year_cutoff]
 
         model = PoissonModel()
         _ = model.fit(
@@ -930,11 +959,6 @@ def walk_forward(
                     game_train = df[df["date"] < m["date"]].drop(columns="year")
                     if game_train.empty:
                         continue
-                    # TODO: `elo_history` here is still the full, year-granular table,
-                    # and PoissonPredictor.fit() truncates it by `year_cutoff` (=y), not
-                    # by `m["date"]` — so ELO-derived strengths stay frozen at the start
-                    # of year y regardless of game_train's day-accurate cutoff. See the
-                    # TODO on PoissonPredictor.fit for the fix.
                     p.fit(game_train, elo_history, half_life, y)
                     # Replay all prior in-year matches to restore live ELO at
                     # predict-time (without this, fit() resets ELO to the
@@ -1526,11 +1550,18 @@ class OutcomeFirstPredictor:
 
 
 class BestEvPredictor:
-    """Pick the score that maximises EV = 2·P(exact score) + P(outcome class).
-
-    For each of the 3 outcome classes, finds its modal score (highest P within
-    that class), computes its EV, and returns the score with the highest EV.
-    Wraps PoissonPredictor; use_elo controls whether ELO features are used.
+    """Pick the score that maximises EV = P(outcome class) * dir_pts + P(exact score) *
+    (exact_pts - dir_pts), using the real (dir_pts, exact_pts) for the match's actual
+    stage (via the `round` column and STAGE_POINTS) -- not a fixed ratio, since the
+    tradeoff between chasing an exact score and a safer direction bet depends on it
+    (group 3:1, r32/r16 5:2, qf 8:4, sf/3rd 10:5, final 15:8). Knockout rounds
+    (KNOCKOUT_STAGES) score against the 120-minute ET-aware scoreline distribution
+    (analytical_knockout_scoreline_probs), matching how results.csv's home_score/
+    away_score already include extra-time goals for those matches, rather than the
+    90-minute-only grid. Wraps PoissonPredictor; use_elo controls whether ELO features
+    are used, and predict_xg/predict_score_ll stay delegated to it unchanged (xG is a
+    90-minute rate parameter either way; ET is a separate process layered on top only
+    for scoreline/outcome probabilities, not xG itself).
     """
 
     is_sequential: bool = True
@@ -1549,30 +1580,53 @@ class BestEvPredictor:
         self._base.fit(training, elo_history, half_life, year_cutoff)
 
     def predict_proba(self, matches: pd.DataFrame) -> np.ndarray:
-        return self._base.predict_proba(matches)
+        out = np.empty((len(matches), 3))
+        for i, (_, m) in enumerate(matches.iterrows()):
+            probs = self._score_probs(m)
+            out[i, 0] = sum(p for (h, a), p in probs.items() if h > a)
+            out[i, 1] = sum(p for (h, a), p in probs.items() if h == a)
+            out[i, 2] = sum(p for (h, a), p in probs.items() if h < a)
+        return out
 
     def predict_xg(self, matches: pd.DataFrame) -> np.ndarray | None:
         return self._base.predict_xg(matches)
 
     def predict_score_ll(self, matches: pd.DataFrame) -> np.ndarray | None:
-        return self._base.predict_score_ll(matches)
+        out = np.empty(len(matches))
+        for i, (_, m) in enumerate(matches.iterrows()):
+            probs = self._score_probs(m)
+            p = probs.get((int(m["home_score"]), int(m["away_score"])), 1e-12)
+            out[i] = np.log(max(p, 1e-12))
+        return out
+
+    def _score_probs(self, m: pd.Series) -> dict[tuple[int, int], float]:
+        model = self._base._model
+        assert model is not None
+        home, away = m["home_team"], m["away_team"]
+        home_adv = 0.0 if bool(m["neutral"]) else 1.0
+        if str(m.get("round", "")) in KNOCKOUT_STAGES:
+            return model.analytical_knockout_scoreline_probs(home, away, home_adv=home_adv)
+        return model.analytical_scoreline_probs(home, away, home_adv=home_adv)
 
     def predict_modal_score(self, matches: pd.DataFrame) -> np.ndarray:
-        probas = self._base.predict_proba(matches)
-        xgs = self._base.predict_xg(matches)
         scores = []
-        for i in range(len(matches)):
-            xg_h, xg_a = float(xgs[i, 0]), float(xgs[i, 1])
-            best_ev = -1.0
-            best: tuple[int, int] = (1, 0)
-            for outcome in range(3):
-                h, a = _modal_in_class(xg_h, xg_a, outcome)
-                p_exact = float(scipy_poisson.pmf(h, xg_h)) * float(scipy_poisson.pmf(a, xg_a))
-                ev = 2.0 * p_exact + float(probas[i, outcome])
-                if ev > best_ev:
-                    best_ev = ev
-                    best = (h, a)
-            scores.append(best)
+        for _, m in matches.iterrows():
+            dir_pts, exact_pts = STAGE_POINTS.get(str(m.get("round", "")), STAGE_POINTS["group"])
+            probs = self._score_probs(m)
+            p_h = sum(p for (h, a), p in probs.items() if h > a)
+            p_d = sum(p for (h, a), p in probs.items() if h == a)
+            p_a = sum(p for (h, a), p in probs.items() if h < a)
+
+            def score_ev(h: int, a: int, p_exact: float) -> float:
+                p_dir = p_h if h > a else (p_d if h == a else p_a)
+                return p_dir * dir_pts + p_exact * (exact_pts - dir_pts)
+
+            # sorted(...)[0], not max(...): matches predict-match's own tie-break
+            # (max() would keep the first-seen tie; reverse-sorted keeps the last-seen).
+            ranked = sorted(
+                probs.items(), key=lambda kv: score_ev(kv[0][0], kv[0][1], kv[1]), reverse=True
+            )
+            scores.append(ranked[0][0])
         return np.array(scores, dtype=int)
 
     def set_elo_by_match(self, elo_by_match: pd.DataFrame | None) -> None:
@@ -1586,31 +1640,36 @@ class ReplayBestEvPredictor:
     """Exact replica of `predict-match --ev`, replayed game by game.
 
     Meant to answer "what would I have gotten betting top-EV via `predict-match`
-    before each game" — i.e. this is what BestEvPredictor was assumed to already do,
-    but doesn't (see the TODOs on PoissonPredictor.fit and its per-game-refit call
-    site). Requires walk_forward(per_game_refit=True): `fit()` ignores the
-    `training`/`elo_history`/`year_cutoff` walk_forward normally passes and instead
-    reloads results.csv itself at predict-match's own two windows — POISSON_TRAINING_
-    MIN_YEAR (2010) for the attack/defense fit, ELO_COMPUTE_MIN_YEAR (1980) for ELO —
-    cut off at `training["date"].max()` (safe: walk_forward built `training` as
-    `date < match_date`, so its max date is always strictly before the match being
-    predicted). Reusing `training` directly was tried first and was wrong: it's only
-    as deep as whatever min_year the caller's `results` happened to use (e.g.
-    betting-backtest's default load_results(min_year=2000)), and that extra 2000-2009
-    data measurably shifts the Poisson fit -- confirmed on Australia vs Turkey
-    (WC2026 game 8): xG favors Turkey with the 2000-cutoff data, Australia with the
-    real 2010-cutoff data predict-match uses, flipping the pick entirely. Without
-    per_game_refit, `training["date"].max()` is just the once-per-year slice's end,
-    so this only reproduces predict-match's exact recommendation when day-accurate.
+    before each game". BestEvPredictor now shares two of the three fixes this class
+    needed (stage-aware EV via STAGE_POINTS, ET-aware knockout scoring, and — under
+    per_game_refit — day-accurate ELO via PoissonPredictor.fit's own fix), so the
+    remaining gap between the two is by design, not a bug in either:
+      - Training-data depth: this class reloads at POISSON_TRAINING_MIN_YEAR (2010),
+        matching cli.py::_load_and_train's --cutoff-date behavior exactly.
+        BestEvPredictor uses whatever `training` the caller already loaded (e.g.
+        betting-backtest's default min_year=2000) — deliberately not changed here,
+        since PoissonPredictor is shared by every predictor in this module and
+        altering its data depth would ripple into the 25-year methodology
+        comparison the rest of the suite is for.
+      - Home advantage (see NOTE below): BestEvPredictor's real per-row treatment is
+        the more accurate general-purpose choice; this class mimics predict-match's
+        simplification on purpose, since its whole point is to reproduce predict-
+        match's own recommendations, not to improve on them.
 
-    Two more predict-match behaviors are reproduced on purpose so its picks match
-    exactly, not approximately:
-      - Real (dir_pts, exact_pts) for the match's actual stage (via the `round`
-        column and STAGE_POINTS), not BestEvPredictor's hardcoded 2*P(exact)+P(outcome).
-      - Knockout rounds (KNOCKOUT_STAGES) are scored against the 120-minute ET-aware
-        scoreline distribution (analytical_knockout_scoreline_probs), matching how
-        results.csv's home_score/away_score already include extra-time goals for
-        those matches — BestEvPredictor always uses the 90-minute-only grid.
+    Requires walk_forward(per_game_refit=True): `fit()` ignores the `training`/
+    `elo_history`/`year_cutoff` walk_forward normally passes and instead reloads
+    results.csv itself at predict-match's own two windows -- POISSON_TRAINING_MIN_YEAR
+    (2010) for the attack/defense fit, ELO_COMPUTE_MIN_YEAR (1980, via the shared
+    _fresh_elo_as_of helper) for ELO -- cut off at `training["date"].max()` (safe:
+    walk_forward built `training` as `date < match_date`, so its max date is always
+    strictly before the match being predicted). Reusing `training` directly for the
+    Poisson fit was tried first and was wrong: it's only as deep as whatever min_year
+    the caller's `results` happened to use, and that extra 2000-2009 data measurably
+    shifts the fit -- confirmed on Australia vs Turkey (WC2026 game 8): xG favors
+    Turkey with the 2000-cutoff data, Australia with the real 2010-cutoff data
+    predict-match uses, flipping the pick entirely. Without per_game_refit,
+    `training["date"].max()` is just the once-per-year slice's end, so this only
+    reproduces predict-match's exact recommendation when day-accurate.
 
     NOTE on home advantage: predict_xg / analytical_*_scoreline_probs are called with
     the default home_adv=0.0, exactly like predict-match — every match is treated as
@@ -1636,26 +1695,22 @@ class ReplayBestEvPredictor:
         half_life: float,
         year_cutoff: int,
     ) -> None:
-        from wc2026.data.elo import ELO_COMPUTE_MIN_YEAR
         from wc2026.data.loader import POISSON_TRAINING_MIN_YEAR, load_results
 
         # `training` is only as deep as whatever min_year the caller loaded results
         # with (e.g. betting-backtest's default load_results(min_year=2000)) -- that's
         # shallower than what cli.py::_load_and_train actually uses (2010 for the
-        # Poisson fit, ELO_COMPUTE_MIN_YEAR=1980 for ELO). Reload independently at
-        # those same two windows instead of trusting `training`'s depth, so this
-        # predictor's fit doesn't silently drift from predict-match's whenever the
-        # caller's own min_year changes. `training["date"].max()` is a safe cutoff
-        # (inclusive) here: walk_forward built `training` as `date < match_date`, so
-        # every date in it is strictly before the match being predicted.
+        # Poisson fit). Reload independently at that same window instead of trusting
+        # `training`'s depth, so this predictor's fit doesn't silently drift from
+        # predict-match's whenever the caller's own min_year changes.
+        # `training["date"].max()` is a safe cutoff (inclusive) here: walk_forward
+        # built `training` as `date < match_date`, so every date in it is strictly
+        # before the match being predicted. ELO uses the same cutoff via
+        # _fresh_elo_as_of, which reloads at ELO_COMPUTE_MIN_YEAR (1980) instead.
         cutoff = training["date"].max()
         poisson_training = load_results(min_year=POISSON_TRAINING_MIN_YEAR)
         poisson_training = poisson_training[poisson_training["date"] <= cutoff]
-        elo_source = load_results(min_year=ELO_COMPUTE_MIN_YEAR)
-        elo_source = elo_source[elo_source["date"] <= cutoff]
-
-        elo_hist = compute_elo_history(elo_source)
-        elo_by_match = compute_prematch_elo(elo_source)
+        elo_hist, elo_by_match = _fresh_elo_as_of(cutoff)
         latest = elo_hist.sort_values("year").drop_duplicates("country", keep="last")
         strengths = {
             str(row.country): TeamStrength(
@@ -1933,7 +1988,9 @@ PREDICTOR_DESCRIPTIONS: dict[str, str] = {
         " then its best score within that class."
     ),
     "poisson-best-ev": (
-        "poisson+elo's xG; modal score maximizes 2*P(exact) + P(outcome) across outcome classes."
+        "poisson+elo's xG; modal score maximizes P(outcome)*dir_pts + P(exact)*(exact_pts-"
+        "dir_pts) using the real per-stage point ratio, with 120-min ET-aware scoring for "
+        "knockout rounds. Under --per-game-refit, ELO is also day-accurate, not year-stale."
     ),
     "poisson-best-ev-no-elo": (
         "Same rule as poisson-best-ev but wraps poisson (no ELO) instead of poisson+elo."
