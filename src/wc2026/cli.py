@@ -44,6 +44,7 @@ def _load_and_train(
         load_or_compute_elo_history,
     )
     from wc2026.data.loader import (
+        POISSON_TRAINING_MIN_YEAR,
         extract_groups,
         load_rankings,
         load_results,
@@ -53,7 +54,7 @@ def _load_and_train(
     from wc2026.model.poisson import PoissonModel
 
     with _status("Loading data…", quiet):
-        results = load_results(min_year=2010)
+        results = load_results(min_year=POISSON_TRAINING_MIN_YEAR)
         schedule = load_schedule()
         rankings = load_rankings()
 
@@ -98,16 +99,6 @@ def _load_and_train(
 
     return model, groups, strengths
 
-
-_STAGE_POINTS: dict[str, tuple[int, int]] = {
-    "group": (1, 3),
-    "r32": (2, 5),
-    "r16": (2, 5),
-    "qf": (4, 8),
-    "sf": (5, 10),
-    "3rd": (5, 10),
-    "final": (8, 15),
-}
 
 _MATCH_STAGE: dict[int, str] = {
     **{n: "r32" for n in range(73, 89)},
@@ -173,9 +164,10 @@ def predict_match(
         load_knockout_fixtures,
         load_schedule,
     )
+    from wc2026.evaluate.metrics import STAGE_POINTS
 
-    if stage not in _STAGE_POINTS:
-        console.print(f"[red]--stage must be one of: {', '.join(_STAGE_POINTS)}[/red]")
+    if stage not in STAGE_POINTS:
+        console.print(f"[red]--stage must be one of: {', '.join(STAGE_POINTS)}[/red]")
         raise typer.Exit(1)
     if game is not None and (team_a is not None or team_b is not None):
         console.print("[red]Pass either --game or TEAM_A/TEAM_B, not both.[/red]")
@@ -266,7 +258,7 @@ def predict_match(
     console.print(f"  Win {tb}{regulation}: [red]{p_b:.1%}[/red]")
 
     if ev:
-        dir_pts, exact_pts = _STAGE_POINTS[stage]
+        dir_pts, exact_pts = STAGE_POINTS[stage]
 
         def score_ev(ga: int, gb: int, p_exact: float) -> float:
             if ga > gb:
@@ -815,7 +807,7 @@ def betting_backtest(
     )
     from wc2026.data.loader import load_results
     from wc2026.evaluate.backtest import build_predictors, walk_forward
-    from wc2026.evaluate.metrics import betting_score
+    from wc2026.evaluate.metrics import STAGE_POINTS, betting_score
 
     predictor_names = [n.strip() for n in predictors.split(",") if n.strip()]
 
@@ -855,7 +847,7 @@ def betting_backtest(
         for _, r in sub.iterrows():
             mh, ma = int(r["modal_h"]), int(r["modal_a"])
             ah, aa = int(r["home_goals"]), int(r["away_goals"])
-            dir_pts, exact_pts = _STAGE_POINTS.get(str(r.get("round", "")), _STAGE_POINTS["group"])
+            dir_pts, exact_pts = STAGE_POINTS.get(str(r.get("round", "")), STAGE_POINTS["group"])
             total += betting_score(mh, ma, ah, aa, dir_pts, exact_pts)
             if mh == ah and ma == aa:
                 exact += 1

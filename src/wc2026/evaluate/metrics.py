@@ -109,6 +109,23 @@ def modal_accuracy(
     return float(((modal_h == actual_home) & (modal_a == actual_away)).mean())
 
 
+# Per-stage (direction_pts, exact_pts) for the WC2026 betting-pool scoring rule.
+# Shared by cli.py (predict-match --ev, betting-backtest scoring) and the
+# evaluate/backtest.py predictors that need the real point ratio per stage.
+STAGE_POINTS: dict[str, tuple[int, int]] = {
+    "group": (1, 3),
+    "r32": (2, 5),
+    "r16": (2, 5),
+    "qf": (4, 8),
+    "sf": (5, 10),
+    "3rd": (5, 10),
+    "final": (8, 15),
+}
+
+# results.csv `round` values that go to 120 minutes (extra time) before penalties.
+KNOCKOUT_STAGES: frozenset[str] = frozenset({"r32", "r16", "qf", "sf", "3rd", "final"})
+
+
 def betting_score(
     modal_h: int,
     modal_a: int,

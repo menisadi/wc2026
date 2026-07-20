@@ -3,6 +3,9 @@ from pathlib import Path
 import pandas as pd
 
 DATA_DIR = Path(__file__).parents[3] / "data" / "raw"
+# min_year used for the Poisson attack/defense training set (cli.py::_load_and_train
+# and evaluate/backtest.py's ReplayBestEvPredictor both use this -- keep them in sync).
+POISSON_TRAINING_MIN_YEAR = 2010
 # Knockout bracket lives outside raw/ — it is hand-curated, not a downloaded dataset.
 KNOCKOUT_BRACKET_PATH = Path(__file__).parents[3] / "data" / "knockout_bracket.csv"
 # Penalty-shootout winners — populated by live.py / refresh-data.
