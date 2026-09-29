@@ -22,3 +22,6 @@ data/my_bets.csv
 !docs/*.html
 /.vibemark.json
 **/.DS_Store
+
+# Generated images
+*.png
