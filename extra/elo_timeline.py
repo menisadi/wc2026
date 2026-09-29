@@ -29,14 +29,99 @@ from pathlib import Path
 
 import pandas as pd
 
-from wc2026.data.elo import DEFAULT_INITIAL_RATING, elo_delta
-from wc2026.data.loader import load_results
-
 DEFAULT_OUT = Path(__file__).parent.parent / "data" / "elo_wc2026_timeline.csv"
 
 WC_START = pd.Timestamp("2026-06-11")
 TOURNAMENT_NAME = "FIFA World Cup"
 ELO_MIN_YEAR = 1980
+
+# ---------------------------------------------------------------------------
+# Elo engine — mirrors src/wc2026/data/elo.py exactly so ratings are identical
+# ---------------------------------------------------------------------------
+
+DEFAULT_INITIAL_RATING = 1500.0
+HOME_ADVANTAGE = 100.0
+
+
+def k_value(tournament: str) -> int:
+    t = tournament.lower()
+    if "world cup" in t and "qualification" not in t:
+        return 60
+    if "qualification" in t or "qualifying" in t:
+        return 40
+    continental = (
+        "uefa euro",
+        "copa américa",
+        "copa america",
+        "afc asian cup",
+        "african cup of nations",
+        "africa cup of nations",
+        "concacaf gold cup",
+        "concacaf nations league",
+        "uefa nations league",
+        "confederations cup",
+    )
+    if any(c in t for c in continental):
+        return 50
+    if "friendly" in t:
+        return 20
+    return 30
+
+
+def _goal_diff_multiplier(goal_diff: int) -> float:
+    n = abs(int(goal_diff))
+    if n <= 1:
+        return 1.0
+    if n == 2:
+        return 1.5
+    return (11.0 + n) / 8.0
+
+
+def elo_delta(
+    home_rating: float,
+    away_rating: float,
+    home_score: int,
+    away_score: int,
+    neutral: bool,
+    tournament: str,
+) -> float:
+    home_adv = 0.0 if neutral else HOME_ADVANTAGE
+    dr = (home_rating + home_adv) - away_rating
+    we_h = 1.0 / (1.0 + 10.0 ** (-dr / 400.0))
+    if home_score > away_score:
+        w_h = 1.0
+    elif home_score == away_score:
+        w_h = 0.5
+    else:
+        w_h = 0.0
+    return k_value(tournament) * _goal_diff_multiplier(home_score - away_score) * (w_h - we_h)
+
+
+# ---------------------------------------------------------------------------
+# results.csv loader — mirrors src/wc2026/data/loader.py::load_results exactly
+# ---------------------------------------------------------------------------
+
+DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
+
+# Normalize team names within results.csv itself (e.g. scraped names vs. canonical)
+RESULTS_TO_CANONICAL: dict[str, str] = {
+    "Cape Verde Islands": "Cape Verde",
+}
+
+
+def load_results(min_year: int = 2010) -> pd.DataFrame:
+    df = pd.read_csv(DATA_DIR / "results.csv", parse_dates=["date"])
+    df = df[df["date"].dt.year >= min_year].copy()
+    df["home_team"] = df["home_team"].map(lambda t: RESULTS_TO_CANONICAL.get(str(t), str(t)))
+    df["away_team"] = df["away_team"].map(lambda t: RESULTS_TO_CANONICAL.get(str(t), str(t)))
+    df = df.drop_duplicates(subset=["date", "home_team", "away_team"], keep="last")
+    df["home_score"] = df["home_score"].fillna(0).astype(int)
+    df["away_score"] = df["away_score"].fillna(0).astype(int)
+    if "round" not in df.columns:
+        df["round"] = ""
+    else:
+        df["round"] = df["round"].fillna("")
+    return df.reset_index(drop=True)
 
 
 def _build_pre_wc_elo(results: pd.DataFrame) -> dict[str, float]:
